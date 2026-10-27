@@ -53,11 +53,11 @@ if ! frame_write_conf "$CONF" $MAP_W $MAP_H $WANT; then
 fi
 sync
 if [ "$WANT" = 1 ]; then
-    echo "Sharper-map test: ON (not car-tested)."
+    echo "Sharper-map test: ON."
     echo "Android Auto now draws on the whole 800x480 frame, pixel aspect"
-    echo "${PIXEL_ASPECT_E4}/10000, stretched to the ${MAP_W}x${MAP_H} window."
-    echo "If the map looks stretched sideways after the reboot, the phone"
-    echo "ignored the pixel aspect: switch this off again."
+    echo "${PIXEL_ASPECT_E4}/10000, stretched to the ${MAP_W}x${MAP_H} window. The hook"
+    echo "scales DPI and insets by the same ratio, so the map should keep its"
+    echo "scale and the turn card its place. Compare with OFF after a reboot."
 else
     echo "Sharper-map test: OFF."
     echo "Back to ${MARGIN_W}x${MARGIN_H} margins, the standard."

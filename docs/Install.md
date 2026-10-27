@@ -158,11 +158,14 @@ output and the unit's copy of the settings (`GAL_PLAYER_WINDOW`,
 `GAL_SECONDARY_MARGINS`) show what was chosen.
 
 The margins cost sharpness: on 1010×376 only 298 of the frame's 480 lines
-carry map, enlarged to fill the window. `CLUSTERMAP_FULL_FRAME=1` (not yet
-car-tested) asks the phone to draw on the whole frame with non-square pixels
-instead (`GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4`, 16117 for 1010×376), and the
-player stretches it to the window. The insets keep their place: the hook
-converts top and bottom. To compare in the car, use the green menu's **Test:
+carry map, enlarged to fill the window. `CLUSTERMAP_FULL_FRAME=1` asks the
+phone to draw on the whole frame with non-square pixels instead
+(`GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4`, 16117 for 1010×376), and the player
+stretches it to the window. On a Skoda P4526 the phone honoured the ratio but,
+at the same DPI, showed more map rather than finer map, so the hook now scales
+DPI and all four insets by the ratio: the map keeps its scale and the turn card
+its place, with about 1.6 times the lines upwards (across stays 800). That
+second step is not yet car-tested. To compare in the car, use the green menu's **Test:
 sharper map ON** and **OFF** entries (reboot after each); they change only the
 unit's copy of the settings. A screen added before this version has no such
 entries: run route 1 once to update it. If the map looks stretched sideways,
