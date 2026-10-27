@@ -111,7 +111,7 @@ The iPhone keeps the car and its instruction card inside a safe area. The
 installer writes it to `/mnt/app/root/mibr-carplay111-safearea.conf` from
 `GAL_SECONDARY_INSETS`, the same setting that keeps the Android Auto map
 clear of the dials, scaled to the window (800x480 with the default insets:
-546x400 at 127,40). `CLUSTERMAP_FULL_FRAME` does not apply to CarPlay, which
+546x313 at 127,40). `CLUSTERMAP_FULL_FRAME` does not apply to CarPlay, which
 is asked for the window's size.
 
 An iPhone that knew the car before the install keeps its old idea of the car

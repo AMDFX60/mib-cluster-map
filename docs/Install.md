@@ -170,7 +170,7 @@ the unit's copy is refreshed, and reboot. The file documents every key.
 | Setting | Shipped | Change it when |
 |---|---|---|
 | `GAL_SECONDARY_DPI` | 125 | map text and turn card too big (lower) or too small (higher) |
-| `GAL_SECONDARY_INSETS` | 40,40,127,127 | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
+| `GAL_SECONDARY_INSETS` | 40,127,127,127 (this fork: Skoda P4526) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
 | `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark |
 | `CLUSTERMAP_FULL_FRAME` | 0 | the map looks blurred on a cluster map window that is not 800×480: 1 uses the whole frame, see [Cluster map window](#cluster-map-window). Not yet car-tested |
 | `CLUSTERMAP_KEEP_ARROWS` | 0 | 1 keeps the turn-arrows jar with the map (adds it if missing): map, arrows and music together on SEAT. Not on VW: the map goes blank when a route starts |
