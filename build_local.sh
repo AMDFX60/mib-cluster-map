@@ -5,22 +5,63 @@
 #   ./build_local.sh            build everything and assemble dist/sdcard
 #   ./build_local.sh hook       only libgal_hook.so + libdmdt_flush.so
 #   ./build_local.sh player     only stream-player (builds ffmpeg-mini on first use)
+#   ./build_local.sh toolchain  build that image first, from a pinned commit of its repository
 #
 # Output: dist/sdcard/ (copy its CONTENTS to the SD card root) and a release zip in dist/.
+# RELEASE_VERSION=... names the package; otherwise it is the git commit.
+# Runs the same way from Git Bash on Windows with Docker Desktop (see ON_WINDOWS).
 set -euo pipefail
 IMG=${QNX_IMAGE:-qnx65-armv7-toolchain:8.5}
+TOOLCHAIN_REPO=https://github.com/luka-dev/qnx65-armv7-toolchain.git
+TOOLCHAIN_COMMIT=baa45224f18ae6b13c2e9c77c6663bb8181eb6a1
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 WHAT=${1:-all}
-BUILD_ID=$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo local)
+BUILD_ID=${BUILD_ID:-$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo local)}
+
+# Git Bash on Windows differs in three ways, all handled here:
+# - it rewrites /work-style arguments into Windows paths, so path conversion is
+#   off and the repository is handed to docker as C:/...;
+# - the SDP's 32-bit binutils (ld, ar, strip, nm 2.19) fail with "Value too
+#   large for defined data type" on files in a Windows bind mount, so each build
+#   runs on a copy inside the container and only its results come back to build/
+#   (the built FFmpeg is kept in the docker volume mib-cluster-map-ffmpeg);
+# - Docker Desktop's command line is often not on Git Bash's PATH.
+ON_WINDOWS=0
+case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) ON_WINDOWS=1 ;; esac
+HOST_ROOT=$ROOT
+if [ "$ON_WINDOWS" = 1 ]; then
+  export MSYS_NO_PATHCONV=1
+  HOST_ROOT=$(cygpath -m "$ROOT")
+  if ! command -v docker >/dev/null 2>&1; then
+    for d in "$(cygpath -u "${LOCALAPPDATA:-C:/}")/Programs/DockerDesktop/resources/bin" \
+             "/c/Program Files/Docker/Docker/resources/bin"; do
+      if [ -e "$d/docker.exe" ]; then PATH="$d:$PATH"; break; fi
+    done
+  fi
+fi
 # Packaging needs no compiler, so only the build steps require the image. Docker
 # Desktop's inspect call has failed transiently here while the image was present,
 # so fall back to the image list before giving up.
 need_image() {
   docker image inspect "$IMG" >/dev/null 2>&1 && return 0
   docker image ls --format '{{.Repository}}:{{.Tag}}' 2>/dev/null | grep -qx "$IMG" && return 0
-  echo "ERROR: docker image $IMG not found; build it first (qnx-run.sh build 8.5)"; exit 1
+  echo "ERROR: docker image $IMG not found; build it first: ./build_local.sh toolchain"; exit 1
 }
-run() { docker run --rm --platform=linux/amd64 -v "$ROOT":/work -w /work -e BUILD_ID="$BUILD_ID" "$IMG" bash -c "$1"; }
+run() {
+  if [ "$ON_WINDOWS" = 1 ]; then
+    docker run --rm --platform=linux/amd64 -v "$HOST_ROOT":/host -v mib-cluster-map-ffmpeg:/ffcache \
+      -e BUILD_ID="$BUILD_ID" "$IMG" bash -c '
+        set -e
+        mkdir -p /work/build && cd /host
+        tar cf - --exclude=./build --exclude=./dist --exclude=./.git . | (cd /work && tar xf -)
+        ln -s /ffcache /work/build/ffmpeg-mini
+        touch /work/.started && cd /work
+        ( '"$1"' )
+        find /work/build -maxdepth 1 -type f -newer /work/.started -exec cp -f {} /host/build/ \;'
+  else
+    docker run --rm --platform=linux/amd64 -v "$ROOT":/work -w /work -e BUILD_ID="$BUILD_ID" "$IMG" bash -c "$1"
+  fi
+}
 ENVSETUP='export PATH=/opt/qnx650/host/linux/x86/usr/bin:$PATH QNX_HOST=/opt/qnx650/host/linux/x86 QNX_TARGET=/opt/qnx650/target/qnx6; P=arm-unknown-nto-qnx6.5.0eabi'
 mkdir -p "$ROOT/build"
 
@@ -84,7 +125,28 @@ build_player() {
   '
 }
 
+build_toolchain() {
+  # Built straight from the repository, not from a local clone: a clone on
+  # Windows turns the SDP's symlinks into small text files, and GCC's libgcc
+  # then fails with ar printing its usage. Equivalent to qnx-run.sh build 8.5.
+  docker build --platform=linux/amd64 --target base-env --build-arg BASE=base-8.5 \
+    -t "$IMG" "$TOOLCHAIN_REPO#$TOOLCHAIN_COMMIT"
+}
+
 package() {
+  # Packaging needs python3, zip, perl and shasum on the host. Where one is
+  # missing (Git Bash on Windows has no python3 or zip; its python3 can be the
+  # Microsoft Store stub), this same step runs in a Python container instead.
+  local missing=
+  python3 -c 'import sys' >/dev/null 2>&1 || missing="$missing python3"
+  for t in zip perl shasum; do command -v "$t" >/dev/null 2>&1 || missing="$missing $t"; done
+  if [ -n "$missing" ] && [ -z "${IN_PACKAGE_CONTAINER:-}" ]; then
+    echo "Packaging in a container (not on this host:$missing)"
+    docker run --rm -v "$HOST_ROOT":/work -w /work -e BUILD_ID="$BUILD_ID" \
+      -e RELEASE_VERSION="${RELEASE_VERSION:-}" -e IN_PACKAGE_CONTAINER=1 python:3.12-slim-bookworm bash -c \
+      'apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends zip perl >/dev/null && bash ./build_local.sh package'
+    return
+  fi
   # SD card layout. Everything of ours sits in one folder; the green menu screen
   # goes where the MQB Coding MIB2 Toolbox looks for custom screens.
   #   ClusterMap/                 scripts, binaries, settings, docs
@@ -140,5 +202,6 @@ case "$WHAT" in
   player) build_player ;;
   all) build_hook; build_player; package ;;
   package) package ;;
-  *) echo "usage: $0 [all|hook|player|package]"; exit 2 ;;
+  toolchain) build_toolchain ;;
+  *) echo "usage: $0 [all|hook|player|package|toolchain]"; exit 2 ;;
 esac

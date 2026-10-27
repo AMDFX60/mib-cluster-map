@@ -168,17 +168,34 @@ Needs Docker. On Apple Silicon the toolchain runs under emulation and the
 first build takes 30–60 minutes.
 
 ```sh
-git clone https://github.com/luka-dev/qnx65-armv7-toolchain
-cd qnx65-armv7-toolchain && ./host-scripts/qnx-run.sh build 8.5
-# if ftp.gnu.org refuses connections, use https://mirrors.kernel.org/gnu/ in
-# the Dockerfile (the checksums are pinned)
-
-cd ../mib-cluster-map
+./build_local.sh toolchain  # once: the toolchain image, from a pinned commit of its repository
 ./build_local.sh            # hook, helper, FFmpeg, player, dist/sdcard and the release zip
 ./build_local.sh player     # only the player; also: hook, package
+RELEASE_VERSION=v1.1.1-beta7-superb2 ./build_local.sh package   # name the package (default: the commit)
 ```
 
+`toolchain` is the same build as `git clone
+https://github.com/luka-dev/qnx65-armv7-toolchain` and `./host-scripts/qnx-run.sh
+build 8.5` there, which still works on macOS and Linux. If ftp.gnu.org refuses
+connections, build from a clone with https://mirrors.kernel.org/gnu/ in its
+Dockerfile (the checksums are pinned).
+
 FFmpeg 6.1.5 is downloaded, checked and built on first use.
+
+The menu screen only reaches the unit with the software update when its
+version there changes, and that version is the digits of the package name: a
+new package needs a name whose digits make a larger number than the installed
+one (`v1.1.1-beta7` is 1117).
+
+**Windows:** run the same commands from Git Bash, with Docker Desktop (WSL 2)
+running. `build_local.sh` notices and works around what differs there: it
+turns off Git Bash's path conversion for docker, finds Docker Desktop's
+command line if it is not on the PATH, builds on a copy inside the container
+(the SDP's 32-bit binutils fail with "Value too large for defined data type"
+on a Windows folder), keeps FFmpeg in the docker volume
+`mib-cluster-map-ffmpeg`, and packages in a Python container when python3 or
+zip is missing. Build the toolchain with `./build_local.sh toolchain`, not from
+a Windows clone: Git there turns the repository's symlinks into text files.
 
 ## Testing on a car
 
