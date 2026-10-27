@@ -42,24 +42,16 @@ script
     label   "Sharper map OFF (margins), then reboot"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_bottom.sh"
-    label   "Test: turn card at the bottom, then reboot"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_left.sh"
-    label   "Test: turn card top left, then reboot"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_right.sh"
-    label   "Test: turn card top right, then reboot"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_hide.sh"
-    label   "Test: hide the turn card (small space), then reboot"
-
-script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top.sh"
-    label   "Turn card at the top (standard), then reboot"
+    label   "Test: show the turn card at the top, then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_bottom.sh"
+    label   "Test: show the turn card at the bottom, then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_standard.sh"
+    label   "Turn card as installed (hidden), then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/size_smaller.sh"

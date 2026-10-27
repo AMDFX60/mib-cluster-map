@@ -38,14 +38,15 @@ navigation map.
 |---|---|---|
 | Sharper map (`CLUSTERMAP_FULL_FRAME`) | Off: the phone draws into an 800×298 band of its frame | **On**: the phone draws the whole frame at the cockpit's real shape, so more of the picture's pixels reach the cockpit |
 | Map size (`GAL_SECONDARY_DPI`) | 125 | **110**: smaller text and a compact turn card |
-| Map space (`GAL_SECONDARY_INSETS`) | 40,40,127,127 | **40,127,127,127**: the turn card at the top, centred, clear of the cockpit's top line and its two lower segments |
+| Turn card (`GAL_SECONDARY_INSETS`) | 40,40,127,127: the card at the top | **134,104,0,0: hidden**. Google Maps leaves its card out when the space it gets is too short for it, so the map shows without the green card, and the car sits in the lower half, for more road ahead. The green menu shows the card again for a test |
 | Day/night (`GAL_SECONDARY_UI_THEME`) | 2, always night | **0, automatic**: follows the car's light sensor, as on the centre screen |
 | Cockpit window (`GAL_PLAYER_WINDOW`) | Taken from the display manager | Also preset to **1010×376**, so a first install fits even before the cockpit has shown its own map |
 | Insets above 127 | Often too long for the message, and then none are sent | Sent: the automatic theme is left out of the message so they fit; if they still do not fit, each is cut to 127 and the log says so |
 | Green menu | Status, logs, uninstall, arrows switch | **Also** the sharper map on and off, test positions for the turn card, and the map size ([below](#green-menu-switches)) |
 | Building | Linux, macOS | **Also Windows**: Git Bash and Docker Desktop |
 
-Packages are named `mib-cluster-map_v1.1.1-betaN-skoda.zip`.
+Releases are named `mib-cluster-map_v1.1.2-skoda.zip`, test versions
+`mib-cluster-map_v1.1.1-betaN-skoda.zip`.
 
 ## Install
 
@@ -99,12 +100,15 @@ reboot. The turn card tests are measured for the 1010×376 window at DPI 110.
 
 | Entry | What it does | On the Superb |
 |---|---|---|
-| Test: sharper map ON / OFF (margins) | The whole frame, or upstream's 800×298 band | ON is a little sharper with a better placed card (beta9); ON is the default |
-| Test: hide the turn card (small space) | Leaves Google Maps a space too small for the card, where the car sits. Maps then leaves the card out, and the car stays in the middle | **Works** (beta12): no card, the car centred, the route ahead visible |
-| Test: turn card top left / top right | Moves the space Maps puts its card in to one side | Works, but the car and the whole view move with the card (beta12): Maps keeps the card centred above the car |
-| Test: turn card at the bottom | The card in a band at the bottom, between the two lower segments | Not tested yet |
-| Turn card at the top (standard) | Back to the installed space | |
-| Test: map smaller / larger (DPI -10 / +10), Map size as installed | The map, its text and the turn card smaller or larger, between DPI 80 and 170 | Not tested yet |
+| Sharper map ON / OFF (margins) | The whole frame, or upstream's 800×298 band | ON is a little sharper with a better placed card (beta9); ON is the default |
+| Test: show the turn card at the top | The card at the top, centred, the car below it (the settings before 1.1.2) | Car-tested up to beta12 |
+| Test: show the turn card at the bottom | The card in a band at the bottom, between the two lower segments | Not tested yet |
+| Turn card as installed (hidden) | Back to the installed settings: no card | Hiding car-tested (beta12): no card, the car centred, the route ahead visible. The lower car of 1.1.2 is not tested yet |
+| Test: map smaller / larger (DPI -10 / +10), Map size as installed | The map and its text smaller or larger, between DPI 80 and 170 | Not tested yet |
+
+Moving the card to the left or right was tried in beta12 and dropped: Google
+Maps keeps the card centred above the car, so the car and the whole view moved
+with it.
 
 ## Status on the Superb (`P4526`)
 
@@ -115,7 +119,7 @@ reboot. The turn card tests are measured for the 1010×376 window at DPI 110.
 | Automatic day/night | Car-tested (beta8), also by another owner ([upstream #41](https://github.com/MacsInSpace/mib-cluster-map/issues/41)) |
 | Sharper map | Car-tested (beta9) |
 | Android Auto version 1.5 (`GAL_DUALSCREEN_AAP_MINOR=5`, from beta11) | Car-tested (beta12): map and insets as before. Earlier tests ran at 7: go back to 7 if something stops working |
-| Turn card hidden or moved | See [above](#green-menu-switches) |
+| Turn card hidden (the standard from 1.1.2) | Car-tested (beta12); the car lower in 1.1.2 not tested yet |
 | Turn card at the bottom, map size | Not tested yet |
 | Turn-arrows jar beside the map (`CLUSTERMAP_KEEP_ARROWS=1`) | Not tested on a Skoda |
 | CarPlay map | In the package from upstream, not tested on a Skoda ([CarPlay](docs/CarPlay.md)) |
@@ -145,12 +149,14 @@ covered.
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.1.1-beta13-skoda ./build_local.sh
+RELEASE_VERSION=v1.1.2-skoda ./build_local.sh
 ```
 
-The package lands in `dist/` and its contents in `dist/sdcard/`. The digits of
-`RELEASE_VERSION` become the version the head unit compares, so count up from
-the installed one. The first run builds FFmpeg once. Details are in
+The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
+replaces the green menu only for a higher version number, which
+`RELEASE_VERSION` gives: `v1.1.1-beta12` is 11112, `v1.1.2` 11299 and
+`v1.1.3-beta1` 11301, whatever follows (`-skoda`). The first run builds FFmpeg
+once. Details are in
 [Development](docs/Development.md) and at the top of `build_local.sh`.
 
 ## Documentation

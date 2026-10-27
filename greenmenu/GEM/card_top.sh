@@ -1,7 +1,7 @@
 #!/bin/sh
 . /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
-# The turn card back where the settings put it, in the unit's settings copy.
-echo "Turn card at the top (standard)"
+# The turn card at the top (test), in the unit's settings copy.
+echo "Test: show the turn card at the top"
 sh "$PKG/scripts/card_layout.sh" top
 RC=$?
 echo

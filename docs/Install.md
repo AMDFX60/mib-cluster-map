@@ -98,10 +98,9 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | Uninstall and restore original state | Full revert |
 | Sharper map ON (whole frame, default), then reboot | Switches `CLUSTERMAP_FULL_FRAME` on in the unit's copy of the settings, without editing the card; see [Cluster map window](#cluster-map-window). This fork installs it on |
 | Sharper map OFF (margins), then reboot | Back to the margins. An install from the card also writes the card's setting again |
-| Test: turn card at the bottom, then reboot | Only for a 1010×376 window: the turn card in a band at the bottom, between the two lower segments, so it no longer covers the road ahead. Google Maps places its card at the top of the space the insets leave, so that space becomes the band. Not yet car-tested: where Maps then puts the car is up to Maps |
-| Test: turn card top left / top right, then reboot | Only for a 1010×376 window: the standard space made as narrow as the card and moved against the left or right inset (`40,127,127,273` and `40,127,273,127`), so the card sits about 73 pixels of the 800 off the centre. Car-tested on the Superb (beta12): the card moves, but the car and the whole view move with it, because Maps keeps its card centred above the car. Moving the card alone is not possible with the insets |
-| Test: hide the turn card (small space), then reboot | Only for a 1010×376 window: leaves Maps a 160×60 space where the car usually sits (`75,163,320,320`), too small for the card. Maps drops its arrival-time card when its space is too short; it drops the turn card as well. Car-tested on the Superb (beta12): no turn card, the car stays in the middle and the route ahead stays visible |
-| Turn card at the top (standard), then reboot | Back to the settings' own insets, from any of the test positions. An install from the card also does that |
+| Test: show the turn card at the top, then reboot | Only for a 1010×376 window: the turn card at the top, centred (`40,127,127,127`, the settings before 1.1.2). Google Maps places its card at the top of the space the insets leave and the car below it in the same space |
+| Test: show the turn card at the bottom, then reboot | Only for a 1010×376 window: the turn card in a band at the bottom, between the two lower segments (`183,10,200,200`), so it no longer covers the road ahead. Not yet car-tested: where Maps then puts the car is up to Maps |
+| Turn card as installed (hidden), then reboot | Back to the settings' own insets from either test. This fork's settings hide the card (`134,104,0,0`): Maps leaves its card out when the space is too short for it. An install from the card also does that |
 | Test: map smaller / larger (DPI -10 / +10), then reboot | Changes `GAL_SECONDARY_DPI` in the unit's copy in steps of 10, between 80 and 170: smaller draws the map, its text and the turn card smaller. The turn card positions above are measured at DPI 110. The status check shows the value |
 | Map size as installed, then reboot | Back to the DPI the install wrote. An install from the card also does that |
 | Switch to turn-by-turn arrows instead (no map) | Removes the map, installs the arrows. Install switches back |
@@ -188,7 +187,7 @@ the unit's copy is refreshed, and reboot. The file documents every key.
 | Setting | Shipped | Change it when |
 |---|---|---|
 | `GAL_SECONDARY_DPI` | 110 (this fork: smaller turn card on the Skoda) | map text and turn card too big (lower) or too small (higher) |
-| `GAL_SECONDARY_INSETS` | 40,127,127,127 (this fork: Skoda P4526) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
+| `GAL_SECONDARY_INSETS` | 134,104,0,0 (this fork: turn card hidden, see [Route 2: green menu](#route-2-green-menu)) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
 | `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark |
 | `CLUSTERMAP_FULL_FRAME` | 1 (this fork) | 1 uses the whole frame on a cluster map window that is not 800×480: a little sharper, see [Cluster map window](#cluster-map-window). 0 goes back to the margins |
 | `GAL_DUALSCREEN_AAP_MINOR` | 5 | the Android Auto version the unit claims (1.x). At 6 or higher Google Maps sends navigation messages this unit cannot read, so the arrows jar shows no turn pictograms (#4). The map shows at 2 to 7. This fork's Skoda settings were car-tested at 7 and again at 5 (beta12, map and insets); go back to 7 if insets, theme or the sharper map stop working |
@@ -213,6 +212,7 @@ top, bottom, left, right.
 | VW 12.3 in Passat B8 (`K4525`) | 145 | `56,73,127,127` | d4nt387, #8 |
 | VW 12.3 in Tiguan (`K4525`) | 145 | `56,120,127,127` | totocastellano-cmd, #27 |
 | Skoda 1010×376 (`P4526`) | 125 | `40,127,127,127` | raskrivuska, #15 |
+| Skoda 1010×376 (`P4526`), turn card hidden, sharper map | 110 | `134,104,0,0` | this fork, 1.1.2 |
 | VW 12.3 in, ETA card showing (`K4525`) | 138 | `52,82,127,127` | totocastellano-cmd, #20 and #12 (`53,83,127,127` on a second car: the same within a pixel) |
 | VW 12.3 in Passat B8 2019 (`K4525`), ETA card showing, with `GAL_SECONDARY_UI_THEME=0` | 138 | `56,73,127,127` | danielszyszko-ui, #41 |
 | VW Golf (`P4521`), ETA card showing, Google Maps and Waze | 138 | `52,82,127,127` | tvarszegi1, #8, road-tested |

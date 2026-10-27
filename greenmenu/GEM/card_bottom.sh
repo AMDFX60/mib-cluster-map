@@ -1,7 +1,7 @@
 #!/bin/sh
 . /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
 # The turn card at the bottom of the cluster map (test), in the unit's settings copy.
-echo "Test: turn card at the bottom"
+echo "Test: show the turn card at the bottom"
 sh "$PKG/scripts/card_layout.sh" bottom
 RC=$?
 echo

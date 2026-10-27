@@ -1,16 +1,16 @@
 #!/bin/sh
 # The green menu's turn-card switch: test positions for the card on the
-# cluster map, or back where the settings put it. Google Maps places its
-# card at the top of the space the insets leave, centred, and the car
-# somewhere in that space too, so each position is a set of insets: the card
-# goes with the space, and the car may go with it. Measured on a Skoda
-# 1010x376 cockpit at DPI 110 (a card about 400x105 in the 800x298 band),
-# so only offered for that window. Changes only GAL_SECONDARY_INSETS in the
-# unit's own copy of the settings, keeping the previous value to go back to;
-# takes effect at the next reboot. An install from the card writes the
-# card's insets again.
+# cluster map, or back to what the settings put there. Google Maps places its
+# card at the top of the space the insets leave, centred, and the car in that
+# space too, so each position is a set of insets: the card goes with the
+# space, and the car with it. This fork's settings hide the card (a space too
+# short for it); the tests show it again. Measured on a Skoda 1010x376
+# cockpit at DPI 110, so only offered for that window. Changes only
+# GAL_SECONDARY_INSETS in the unit's own copy of the settings, keeping the
+# installed value to go back to; takes effect at the next reboot. An install
+# from the card writes the card's insets again.
 #
-#   card_layout.sh bottom|left|right|hide|top
+#   card_layout.sh top|bottom|standard
 # Exit 0: switched, reboot. 3: nothing to change. Anything else: failed.
 HERE=`dirname "$0"`
 . "$HERE/lib_app_mount.sh"
@@ -20,21 +20,15 @@ MARK="# Turn card position (switched by the green menu)"
 # top,bottom,left,right in the margin band (800x298). With full frame the hook
 # scales these by the pixel aspect, and with theme 0 each still fits the 15
 # bytes UiConfig has.
+# top: the card at the top, centred, clear of the cockpit's top line and its
+#   two lower segments (the settings before 1.1.2).
 # bottom: a 400x105 band, centred, 10 above the lower edge, between the two
 #   lower segments.
-# left, right: the standard space (40 from the top, 127 above the bottom) as
-#   narrow as the card and against the left or right inset of 127, as far as
-#   the standard insets go: the card about 73 off the centre.
-# hide: a 160x60 box where the car sits with the standard insets, too small
-#   for the card. Maps drops its arrival-time card when the space is too
-#   short; whether it drops the turn card as well is the test.
 case "$1" in
-    bottom) NEW=183,10,200,200; WHAT="at the bottom" ;;
-    left)   NEW=40,127,127,273; WHAT="top left" ;;
-    right)  NEW=40,127,273,127; WHAT="top right" ;;
-    hide)   NEW=75,163,320,320; WHAT="in a small space, to hide it" ;;
-    top)    NEW=; WHAT="at the top" ;;
-    *) echo "usage: $0 bottom|left|right|hide|top" >&2; exit 2 ;;
+    top)      NEW=40,127,127,127; WHAT="at the top" ;;
+    bottom)   NEW=183,10,200,200; WHAT="at the bottom" ;;
+    standard) NEW=; WHAT="as installed" ;;
+    *) echo "usage: $0 top|bottom|standard" >&2; exit 2 ;;
 esac
 
 # uiconfig_fits INSETS THEME PIXEL_ASPECT_E4
@@ -58,16 +52,18 @@ if [ ! -r "$CONF" ]; then
     exit 1
 fi
 WINDOW=`sed -n 's/^[ 	]*GAL_PLAYER_WINDOW[ 	]*=[ 	]*\([0-9]*x[0-9]*\)[ 	]*$/\1/p' "$CONF" | tail -1`
-if [ "$1" != top ] && [ "$WINDOW" != 1010x376 ]; then
+if [ "$1" != standard ] && [ "$WINDOW" != 1010x376 ]; then
     echo "The cluster map window is ${WINDOW:-unknown}. The test positions are"
     echo "measured for a 1010x376 window (Skoda) only. Nothing changed."
     exit 3
 fi
 # The hook reads a key's first line.
 NOW=`sed -n 's/^[ 	]*GAL_SECONDARY_INSETS[ 	]*=[ 	]*\([0-9]*,[0-9]*,[0-9]*,[0-9]*\)[ 	]*$/\1/p' "$CONF" | head -1`
-SAVED=`sed -n 's/^CLUSTERMAP_CARD_TOP_INSETS=\([0-9]*,[0-9]*,[0-9]*,[0-9]*\)[ 	]*$/\1/p' "$CONF" | tail -1`
+SAVED=`sed -n 's/^CLUSTERMAP_CARD_STANDARD_INSETS=\([0-9]*,[0-9]*,[0-9]*,[0-9]*\)[ 	]*$/\1/p' "$CONF" | tail -1`
+# The betas before 1.1.2 kept it as CLUSTERMAP_CARD_TOP_INSETS.
+[ -n "$SAVED" ] || SAVED=`sed -n 's/^CLUSTERMAP_CARD_TOP_INSETS=\([0-9]*,[0-9]*,[0-9]*,[0-9]*\)[ 	]*$/\1/p' "$CONF" | tail -1`
 # The position in use; a saved value without one is beta10's bottom switch.
-POS=top
+POS=standard
 if [ -n "$SAVED" ]; then
     POS=`sed -n 's/^CLUSTERMAP_CARD_POSITION=\([a-z]*\)[ 	]*$/\1/p' "$CONF" | tail -1`
     [ -n "$POS" ] || POS=bottom
@@ -76,11 +72,20 @@ if [ "$1" = "$POS" ]; then
     echo "The turn card is already $WHAT. Nothing changed."
     exit 3
 fi
-if [ "$1" = top ]; then
+if [ "$1" = standard ]; then
     NEW=$SAVED
     KEEP=
 else
     KEEP=${SAVED:-${NOW:-40,40,127,127}}
+    if [ "$NEW" = "$KEEP" ]; then
+        if [ "$POS" = standard ]; then
+            echo "The installed insets are already $NEW: the turn card is"
+            echo "$WHAT without a test. Nothing changed."
+            exit 3
+        fi
+        # The installed insets are this position: back to them, no test.
+        KEEP=
+    fi
 fi
 
 mount -uw "$APP_MOUNT" 2>/dev/null || { echo "Cannot remount $APP_MOUNT read-write. Nothing changed."; exit 1; }
@@ -88,6 +93,7 @@ APP_WRITABLE=1
 trap app_mount_finish 0 1 2 15
 # Every line of these keys goes first, so each is in the file once.
 if sed -e '/^[ 	]*GAL_SECONDARY_INSETS[ 	]*=/d' \
+       -e '/^[ 	]*CLUSTERMAP_CARD_STANDARD_INSETS[ 	]*=/d' \
        -e '/^[ 	]*CLUSTERMAP_CARD_TOP_INSETS[ 	]*=/d' \
        -e '/^[ 	]*CLUSTERMAP_CARD_POSITION[ 	]*=/d' \
        -e '/^# Turn card position (switched by the green menu)$/d' \
@@ -96,7 +102,7 @@ if sed -e '/^[ 	]*GAL_SECONDARY_INSETS[ 	]*=/d' \
      echo "$MARK"
      echo "GAL_SECONDARY_INSETS=$NEW"
      if [ -n "$KEEP" ]; then
-         echo "CLUSTERMAP_CARD_TOP_INSETS=$KEEP"
+         echo "CLUSTERMAP_CARD_STANDARD_INSETS=$KEEP"
          echo "CLUSTERMAP_CARD_POSITION=$1"
      fi; } >> "$CONF.new" 2>/dev/null &&
    mv "$CONF.new" "$CONF" 2>/dev/null; then
@@ -107,10 +113,10 @@ else
     exit 1
 fi
 sync
-if [ "$1" = top ]; then
-    echo "Turn card: back at the top. Insets $NEW."
+if [ -z "$KEEP" ]; then
+    echo "Turn card: as installed. Insets $NEW."
 else
-    echo "Turn card: $WHAT (test). Insets $NEW, standard $KEEP."
+    echo "Turn card: $WHAT (test). Insets $NEW, installed $KEEP."
     THEME=`sed -n 's/^GAL_SECONDARY_UI_THEME=\([0-9]\)[ 	]*$/\1/p' "$CONF" | head -1`
     PAR=`sed -n 's/^GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4=\([0-9][0-9]*\)[ 	]*$/\1/p' "$CONF" | head -1`
     if [ -z "$PAR" ] || [ "$PAR" -eq 0 ] || [ "$PAR" -gt 80000 ]; then PAR=10000; fi
@@ -123,6 +129,6 @@ else
         echo "Note: the positions are measured at DPI 110; this unit has DPI $DPI,"
         echo "so the card is another size and may fit the space less well."
     fi
-    echo "If the car or the road ahead ends up hidden, switch it back to the top."
+    echo "If the car or the road ahead ends up hidden, switch back to the standard."
 fi
 exit 0

@@ -11,7 +11,7 @@ stock unit the same way: a signed header taken unchanged from the toolbox
 [common] section that names a final script. Checksums are SHA-1, as the
 toolbox's own values confirm for its final script and its menu file.
 """
-import hashlib, os, sys
+import hashlib, os, re, sys
 
 def sha1(path):
     return hashlib.sha1(open(path, "rb").read()).hexdigest()
@@ -38,7 +38,16 @@ def main():
     open(hpath, "w", newline="\n").write(hashes)
     dir_size = sum(os.path.getsize(os.path.join(final_dir, n)) for n in names) + os.path.getsize(hpath)
 
-    numeric = "".join(c for c in version if c.isdigit()) or "1"
+    # The unit replaces the menu file only for a higher Version. Its digits
+    # alone make 1.1.2 (112) lower than 1.1.1-beta12 (11112), so X.Y.Z-betaN
+    # counts as X*10000 + Y*1000 + Z*100 + N and a release as N = 99:
+    # 1.1.1-beta12 stays 11112, 1.1.2 is 11299, 1.1.3-beta1 11301.
+    m = re.match(r"v?(\d)\.(\d)\.(\d)(?:-beta(\d\d?))?(?:-|$)", version)
+    if m and m.group(4) != "99":
+        numeric = str(int(m.group(1)) * 10000 + int(m.group(2)) * 1000 +
+                      int(m.group(3)) * 100 + int(m.group(4) or 99))
+    else:
+        numeric = "".join(c for c in version if c.isdigit()) or "1"
     body = f'''[common]
 skipSaveTrainName = "true"
 vendor = "MQB.Coding"

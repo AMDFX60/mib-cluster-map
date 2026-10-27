@@ -84,7 +84,7 @@ PAR=`sed -n 's/^GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4=\([0-9][0-9]*\)[ 	]*$/\1/p' 
 if [ -n "$PAR" ] && [ "$PAR" -gt 0 ] && [ "$PAR" -le 80000 ] && [ "$PAR" != 10000 ]; then
     echo "With the sharper map the hook sends `expr \( $NEW \* $PAR + 5000 \) / 10000`."
 fi
-if grep -q '^CLUSTERMAP_CARD_TOP_INSETS=' "$CONF" && [ "$NEW" != 110 ]; then
+if grep -q -e '^CLUSTERMAP_CARD_STANDARD_INSETS=' -e '^CLUSTERMAP_CARD_TOP_INSETS=' "$CONF" && [ "$NEW" != 110 ]; then
     echo "Note: the turn card test positions are measured at DPI 110."
 fi
 exit 0

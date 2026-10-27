@@ -20,17 +20,15 @@ if [ -r "$UNIT_CONF" ]; then
     fi
     i=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9,]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
     d=`sed -n 's/^GAL_SECONDARY_DPI=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
-    if grep -q '^CLUSTERMAP_CARD_TOP_INSETS=' "$UNIT_CONF"; then
+    if grep -q -e '^CLUSTERMAP_CARD_STANDARD_INSETS=' -e '^CLUSTERMAP_CARD_TOP_INSETS=' "$UNIT_CONF"; then
         p=`sed -n 's/^CLUSTERMAP_CARD_POSITION=\([a-z]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
         case "${p:-bottom}" in
-            bottom) p="at the bottom" ;;
-            left)   p="top left" ;;
-            right)  p="top right" ;;
-            hide)   p="in a small space, to hide it" ;;
+            top|bottom) p="at the $p" ;;
+            *)          p="moved" ;;
         esac
         echo "  turn card: $p (test), insets ${i:-unknown}"
     else
-        echo "  turn card: at the top, insets ${i:-unknown}"
+        echo "  turn card: as installed, insets ${i:-unknown}"
     fi
     s=`sed -n 's/^CLUSTERMAP_DPI_INSTALLED=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
     if [ -n "$s" ]; then
