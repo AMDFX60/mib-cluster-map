@@ -35,11 +35,11 @@ script
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/full_frame_on.sh"
-    label   "Test: sharper map ON (whole frame), then reboot"
+    label   "Sharper map ON (whole frame, default), then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/full_frame_off.sh"
-    label   "Test: sharper map OFF (standard), then reboot"
+    label   "Sharper map OFF (margins), then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_bottom.sh"

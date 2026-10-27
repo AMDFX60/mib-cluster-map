@@ -1,7 +1,7 @@
 #!/bin/sh
 . /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
-# The sharper-map test (CLUSTERMAP_FULL_FRAME) on, in the unit's settings copy.
-echo "Test: sharper map ON"
+# Sharper map (CLUSTERMAP_FULL_FRAME) on, in the unit's settings copy.
+echo "Sharper map ON"
 sh "$PKG/scripts/full_frame.sh" on
 RC=$?
 echo

@@ -14,9 +14,9 @@ if [ -r "$UNIT_CONF" ]; then
     w=`sed -n 's/^GAL_PLAYER_WINDOW=\([0-9]*x[0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
     m=`sed -n 's/^GAL_SECONDARY_MARGINS=\([0-9]*x[0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
     if [ "`sed -n 's/^CLUSTERMAP_FULL_FRAME=\([01]\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`" = 1 ]; then
-        echo "  window ${w:-unknown}, sharper-map test: ON (whole frame)"
+        echo "  window ${w:-unknown}, sharper map: ON (whole frame)"
     else
-        echo "  window ${w:-unknown}, sharper-map test: off (margins ${m:-unknown})"
+        echo "  window ${w:-unknown}, sharper map: off (margins ${m:-unknown})"
     fi
     i=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9,]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
     d=`sed -n 's/^GAL_SECONDARY_DPI=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
