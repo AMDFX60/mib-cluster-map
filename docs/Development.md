@@ -171,7 +171,7 @@ first build takes 30–60 minutes.
 ./build_local.sh toolchain  # once: the toolchain image, from a pinned commit of its repository
 ./build_local.sh            # hook, helper, FFmpeg, player, dist/sdcard and the release zip
 ./build_local.sh player     # only the player; also: hook, package
-RELEASE_VERSION=v1.1.1-beta7-superb2 ./build_local.sh package   # name the package (default: the commit)
+RELEASE_VERSION=v1.1.1-beta8-skoda ./build_local.sh   # name the package (default: the commit)
 ```
 
 `toolchain` is the same build as `git clone
