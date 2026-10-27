@@ -512,6 +512,10 @@ static size_t build_insets_payload(unsigned char *out, size_t max_out,
     size_t uiconfig_len = 0;
     size_t total_len = 0;
 
+    /* Two varint bytes each at most, so insets[] and uiconfig[] cannot overflow. */
+    if (top > 0x3fffu || bottom > 0x3fffu || left > 0x3fffu || right > 0x3fffu) {
+        return 0;
+    }
     if (top > 0u) {
         insets[insets_len++] = 0x08; /* tag 1: top */
         insets_len += encode_varint(insets + insets_len, top);
@@ -543,9 +547,17 @@ static size_t build_insets_payload(unsigned char *out, size_t max_out,
     uiconfig_len += encode_varint(uiconfig + uiconfig_len, (uint32_t)insets_len);
     memcpy(uiconfig + uiconfig_len, insets, insets_len);
     uiconfig_len += insets_len;
-    /* UiConfig field 4 is UiTheme: 0=automatic, 1=light, 2=dark/night. */
-    uiconfig[uiconfig_len++] = 0x20; /* tag 4: ui_theme, wire type varint */
-    uiconfig[uiconfig_len++] = (unsigned char)(ui_theme <= 2u ? ui_theme : 0u);
+    /*
+     * UiConfig field 4 is UiTheme: 0=automatic, 1=light, 2=dark/night.
+     * Automatic is the protobuf default, so it is left out rather than sent
+     * as 0: the two bytes saved let three of the four insets go above 127
+     * (two varint bytes each) and still fit the 15-byte string. The car's
+     * night-mode sensor then sets day or night, as on the centre screen.
+     */
+    if (ui_theme == 1u || ui_theme == 2u) {
+        uiconfig[uiconfig_len++] = 0x20; /* tag 4: ui_theme, wire type varint */
+        uiconfig[uiconfig_len++] = (unsigned char)ui_theme;
+    }
 
     out[total_len++] = 0x5a; /* tag 11: UiConfig */
     total_len += encode_varint(out + total_len, (uint32_t)uiconfig_len);
@@ -566,7 +578,7 @@ static void apply_video_config_insets(void *vconf, const gal_secondary_config *c
     uint32_t bottom = (config != NULL) ? config->insets_bottom : 40u;
     uint32_t left = (config != NULL) ? config->insets_left : 127u;
     uint32_t right = (config != NULL) ? config->insets_right : 127u;
-    uint32_t ui_theme = (config != NULL) ? config->ui_theme : 2u;
+    uint32_t ui_theme = (config != NULL) ? config->ui_theme : 0u;
     uint32_t viewing_distance = (config != NULL) ? config->viewing_distance : 700u;
 
     if (vconf == NULL) return;
@@ -591,6 +603,21 @@ static void apply_video_config_insets(void *vconf, const gal_secondary_config *c
     } else {
         payload_len = build_insets_payload(payload, 15u, top, bottom, left, right,
                                            ui_theme);
+        /*
+         * Too long for the string: used to send nothing at all, silently, so
+         * the phone fell back to the whole frame. Send every inset cut to
+         * 127 instead, which always fits, and say so.
+         */
+        if (payload_len == 0u) {
+            gal_hook_logf("event=video.insets result=too_long tag=%s top=%u bottom=%u left=%u right=%u ui_theme=%u action=clamp_to_127",
+                          context_tag, top, bottom, left, right, ui_theme);
+            if (top > 127u) top = 127u;
+            if (bottom > 127u) bottom = 127u;
+            if (left > 127u) left = 127u;
+            if (right > 127u) right = 127u;
+            payload_len = build_insets_payload(payload, 15u, top, bottom, left, right,
+                                               ui_theme);
+        }
     }
 
     if (payload_len > 0u && payload_len <= 15u) {
@@ -598,8 +625,8 @@ static void apply_video_config_insets(void *vconf, const gal_secondary_config *c
         memcpy(obj + 0x08, payload, payload_len);
         obj[0x08 + payload_len] = 0;
         store_u32(vconf, 0x18u, (uint32_t)payload_len);
-        gal_hook_logf("event=video.insets result=success tag=%s top=%u bottom=%u left=%u right=%u len=%zu",
-                      context_tag, top, bottom, left, right, payload_len);
+        gal_hook_logf("event=video.insets result=success tag=%s top=%u bottom=%u left=%u right=%u ui_theme=%u len=%zu",
+                      context_tag, top, bottom, left, right, ui_theme, payload_len);
     }
 }
 

@@ -155,6 +155,13 @@ window's size. If the size cannot be read, 800×480 is used. The install
 output and the unit's copy of the settings (`GAL_PLAYER_WINDOW`,
 `GAL_SECONDARY_MARGINS`) show what was chosen.
 
+The margins cost sharpness: on 1010×376 only 298 of the frame's 480 lines
+carry map, enlarged to fill the window. `CLUSTERMAP_FULL_FRAME=1` (not yet
+car-tested) asks the phone to draw on the whole frame with non-square pixels
+instead (`GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4`, 16117 for 1010×376), and the
+player stretches it to the window. If the map then looks stretched sideways,
+the phone ignored the ratio: set it back to 0 and install again.
+
 ## Settings
 
 Edit `ClusterMap/gal_dualscreen.conf` on the card, run the install again so
@@ -163,8 +170,9 @@ the unit's copy is refreshed, and reboot. The file documents every key.
 | Setting | Shipped | Change it when |
 |---|---|---|
 | `GAL_SECONDARY_DPI` | 125 | map text and turn card too big (lower) or too small (higher) |
-| `GAL_SECONDARY_INSETS` | 40,40,127,127 | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right; each 0 to 127. See the settings owners have settled on, below |
-| `GAL_SECONDARY_UI_THEME` | 2 (dark) | 0 lets Google Maps switch between day and night (Waze stays dark), 1 is light |
+| `GAL_SECONDARY_INSETS` | 40,40,127,127 | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
+| `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark |
+| `CLUSTERMAP_FULL_FRAME` | 0 | the map looks blurred on a cluster map window that is not 800×480: 1 uses the whole frame, see [Cluster map window](#cluster-map-window). Not yet car-tested |
 | `CLUSTERMAP_KEEP_ARROWS` | 0 | 1 keeps the turn-arrows jar with the map (adds it if missing): map, arrows and music together on SEAT. Not on VW: the map goes blank when a route starts |
 | `CLUSTERMAP_ADD_NAVIGNORE` | 0 | the map goes as soon as a route starts, on firmware where the installer does not add `NavActiveIgnore` by itself. 1 adds it, with a backup, and uninstall removes it. It edits the script that starts the centre screen, so check SSH works first |
 | `CLUSTERMAP_CARPLAY_TRIAL` | unset | the installer refuses the CarPlay map because this unit's `libairplay.so` is a different build. Put the size it prints here to allow the attempt; the hook still checks every symbol it patches and leaves CarPlay stock if they do not fit. See [CarPlay](CarPlay.md) |

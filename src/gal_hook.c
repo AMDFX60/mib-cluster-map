@@ -64,6 +64,9 @@
  * brings the 3D map perspective closer to the vehicle. Change it in
  * gal_dualscreen.conf rather than rebuilding.
  *
+ * ui_theme 0 (automatic) lets the car's night-mode sensor switch the cluster
+ * map between day and night like the centre screen; 2 kept it dark always.
+ *
  * Order: width, height, fps, codec, displayable_id, vc_display,
  * context_id, restore_displayable_id, service_id, display_id, dpi,
  * viewing_distance, pixel_aspect_ratio_e4, insets_top, insets_bottom,
@@ -73,7 +76,7 @@ static gal_secondary_config g_config = {
     800u, 480u, 30u, 1u, 3u, 4u, 70u, 33u, 0u, 1u,
     140u, 700u, 10000u,
     40u, 40u, 127u, 127u,
-    2u, 0u, { 0 },
+    0u, 0u, { 0 },
     0u, 0u
 };
 static volatile int g_initialized;

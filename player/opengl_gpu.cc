@@ -219,21 +219,31 @@ static GLfloat backgroundColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
  * and the rest fills the window. A CarPlay stream is asked for at the
  * window's size and fills it as it is. Anything else that still differs in
  * shape is drawn centred at its own shape, with black bars.
+ *
+ * Margins cost picture: on a 1010x376 window only 298 of the 480 lines carry
+ * map. With CLUSTERMAP_FULL_FRAME the installer sets no margins and declares
+ * non-square pixels instead (GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4, 16117 for
+ * 1010x376), so the phone draws on the whole frame, squeezed, and the frame
+ * is stretched back here. 10000 is square pixels: no change.
  */
 static int g_marginW = 0, g_marginH = 0;
+static int g_pixelAspectE4 = 10000;
 static GLfloat fittedVertices[12];
 static GLfloat croppedTexCoords[8];
 static void fit_frame(int frameW, int frameH) {
-    float sx = 1.0f, sy = 1.0f, cu = 0.0f, cv = 0.0f;
+    float sx = 1.0f, sy = 1.0f, cu = 0.0f, cv = 0.0f, par = 1.0f;
     int contentW = frameW, contentH = frameH;
-    if (frameW == 800 && frameH == 480 && (g_marginW > 0 || g_marginH > 0)) {
-        contentW = frameW - g_marginW;
-        contentH = frameH - g_marginH;
-        cu = (float)g_marginW / 2.0f / (float)frameW;
-        cv = (float)g_marginH / 2.0f / (float)frameH;
+    if (frameW == 800 && frameH == 480) {
+        if (g_marginW > 0 || g_marginH > 0) {
+            contentW = frameW - g_marginW;
+            contentH = frameH - g_marginH;
+            cu = (float)g_marginW / 2.0f / (float)frameW;
+            cv = (float)g_marginH / 2.0f / (float)frameH;
+        }
+        par = (float)g_pixelAspectE4 / 10000.0f;
     }
     if (contentW > 0 && contentH > 0) {
-        float contentAspect = (float)contentW / (float)contentH;
+        float contentAspect = (float)contentW * par / (float)contentH;
         float windowAspect = (float)windowWidth / (float)windowHeight;
         if (contentAspect > windowAspect * 1.01f) sy = windowAspect / contentAspect;
         else if (contentAspect < windowAspect * 0.99f) sx = contentAspect / windowAspect;
@@ -242,8 +252,8 @@ static void fit_frame(int frameW, int frameH) {
     const GLfloat t[8] = { cu, cv,  1.0f - cu, cv,  1.0f - cu, 1.0f - cv,  cu, 1.0f - cv };
     memcpy(fittedVertices, v, sizeof v);
     memcpy(croppedTexCoords, t, sizeof t);
-    LOG("render: %dx%d frame, %dx%d after margins, in a %dx%d window, drawn %dx%d",
-        frameW, frameH, contentW, contentH, windowWidth, windowHeight,
+    LOG("render: %dx%d frame, %dx%d after margins, pixel aspect %.4f, in a %dx%d window, drawn %dx%d",
+        frameW, frameH, contentW, contentH, par, windowWidth, windowHeight,
         (int)(sx * windowWidth + 0.5f), (int)(sy * windowHeight + 0.5f));
 }
 
@@ -1156,6 +1166,10 @@ static void load_player_config() {
                     g_marginW = w & ~1;
                     g_marginH = h & ~1;
                 }
+            } else if (strcmp(key, "GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4") == 0) {
+                /* Wide enough for any window of 320..1920 by 160..1080. */
+                int e4 = atoi(val);
+                if (e4 >= 1000 && e4 <= 80000) g_pixelAspectE4 = e4;
             } else if (strcmp(key, "GAL_PLAYER_NVSS_OUTPUT") == 0) {
                 int o = atoi(val);
                 if (o == 0 || o == 1) g_nvssOutput = (unsigned)o;

@@ -434,7 +434,36 @@ fi
 # Android Auto's frame is always 800x480: the phone is asked to leave
 # margins so the rest has the window's shape (none for an 800x480 window).
 # "|| :" because expr exits 1 when the answer is 0, and this runs under set -e.
-if [ `expr $MAP_W \* 480` -gt `expr $MAP_H \* 800` ]; then
+#
+# CLUSTERMAP_FULL_FRAME=1 (not car-tested): no margins, but non-square
+# pixels (pixel_aspect_ratio_e4 = 6000 * W / H, 16117 for 1010x376), so the
+# phone draws on all 480 lines, squeezed, and the player stretches the frame
+# to the window. A margin band uses only 298 of them on 1010x376. If the
+# phone ignores the ratio, the map looks stretched sideways: set it back to 0.
+FULL_FRAME=`sed -n 's/^CLUSTERMAP_FULL_FRAME=\([01]\)[ 	]*$/\1/p' \
+    "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
+# The hook takes a key's first line and the player its last, so the ratio
+# must be on one line only: drop the file's own here, the one written below
+# is then the only one. Inside an if, so a failure falls back to margins
+# instead of ending the install under set -e.
+if [ "$FULL_FRAME" = 1 ]; then
+    if sed '/^[ 	]*GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4[ 	]*=/d' \
+           "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" > "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" 2>/dev/null &&
+       mv "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null; then
+        chmod 644 "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null || true
+    else
+        rm -f "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" 2>/dev/null || true
+        FULL_FRAME=0
+        echo "WARNING: could not edit the settings copy; CLUSTERMAP_FULL_FRAME ignored, using margins." >&2
+    fi
+fi
+PIXEL_ASPECT_E4=10000
+if [ "$FULL_FRAME" = 1 ]; then
+    MARGIN_W=0
+    MARGIN_H=0
+    PIXEL_ASPECT_E4=`expr \( 6000 \* $MAP_W + $MAP_H / 2 \) / $MAP_H`
+    echo "Android Auto: whole 800x480 frame with pixel aspect ${PIXEL_ASPECT_E4}/10000, stretched to the window (CLUSTERMAP_FULL_FRAME, not car-tested)."
+elif [ `expr $MAP_W \* 480` -gt `expr $MAP_H \* 800` ]; then
     MARGIN_W=0
     MARGIN_H=`expr 480 - \( 800 \* $MAP_H + $MAP_W \) / \( 2 \* $MAP_W \) \* 2 || :`
 else
@@ -447,7 +476,9 @@ fi
 if [ -w "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" ]; then
     { echo; echo "# Written by the installer from the cluster map window it read."
       echo "GAL_PLAYER_WINDOW=${MAP_W}x${MAP_H}"
-      echo "GAL_SECONDARY_MARGINS=${MARGIN_W}x${MARGIN_H}"; } >> "$PRELOAD_WRITE_DIR/gal_dualscreen.conf"
+      echo "GAL_SECONDARY_MARGINS=${MARGIN_W}x${MARGIN_H}"
+      if [ "$FULL_FRAME" = 1 ]; then echo "GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4=$PIXEL_ASPECT_E4"; fi
+    } >> "$PRELOAD_WRITE_DIR/gal_dualscreen.conf"
 fi
 
 # Install stream-player to /mnt/app/navigation
