@@ -21,9 +21,22 @@ if [ -r "$UNIT_CONF" ]; then
     i=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9,]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
     d=`sed -n 's/^GAL_SECONDARY_DPI=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
     if grep -q '^CLUSTERMAP_CARD_TOP_INSETS=' "$UNIT_CONF"; then
-        echo "  turn card: at the bottom (test), insets ${i:-unknown}, DPI ${d:-unknown}"
+        p=`sed -n 's/^CLUSTERMAP_CARD_POSITION=\([a-z]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
+        case "${p:-bottom}" in
+            bottom) p="at the bottom" ;;
+            left)   p="top left" ;;
+            right)  p="top right" ;;
+            hide)   p="in a small space, to hide it" ;;
+        esac
+        echo "  turn card: $p (test), insets ${i:-unknown}"
     else
-        echo "  turn card: at the top, insets ${i:-unknown}, DPI ${d:-unknown}"
+        echo "  turn card: at the top, insets ${i:-unknown}"
+    fi
+    s=`sed -n 's/^CLUSTERMAP_DPI_INSTALLED=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
+    if [ -n "$s" ]; then
+        echo "  map size: DPI ${d:-unknown} (test, installed $s)"
+    else
+        echo "  map size: DPI ${d:-unknown}"
     fi
 fi
 if grep -q 'libcarplay_cluster.so' "$CONFIG" 2>/dev/null; then

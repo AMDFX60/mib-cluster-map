@@ -99,7 +99,11 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | Sharper map ON (whole frame, default), then reboot | Switches `CLUSTERMAP_FULL_FRAME` on in the unit's copy of the settings, without editing the card; see [Cluster map window](#cluster-map-window). This fork installs it on |
 | Sharper map OFF (margins), then reboot | Back to the margins. An install from the card also writes the card's setting again |
 | Test: turn card at the bottom, then reboot | Only for a 1010×376 window: the turn card in a band at the bottom, between the two lower segments, so it no longer covers the road ahead. Google Maps places its card at the top of the space the insets leave, so that space becomes the band. Not yet car-tested: where Maps then puts the car is up to Maps |
-| Turn card at the top (standard), then reboot | Back to the settings' own insets. An install from the card also does that |
+| Test: turn card top left / top right, then reboot | Only for a 1010×376 window: the standard space made as narrow as the card and moved against the left or right inset (`40,127,127,273` and `40,127,273,127`), so the card sits about 73 pixels of the 800 off the centre. The car may move with it. Not yet car-tested |
+| Test: hide the turn card (small space), then reboot | Only for a 1010×376 window: leaves Maps a 160×60 space where the car usually sits (`75,163,320,320`), too small for the card. Maps drops its arrival-time card when its space is too short; whether it drops the turn card as well, or draws it anyway, is what this tests. Not yet car-tested |
+| Turn card at the top (standard), then reboot | Back to the settings' own insets, from any of the test positions. An install from the card also does that |
+| Test: map smaller / larger (DPI -10 / +10), then reboot | Changes `GAL_SECONDARY_DPI` in the unit's copy in steps of 10, between 80 and 170: smaller draws the map, its text and the turn card smaller. The turn card positions above are measured at DPI 110. The status check shows the value |
+| Map size as installed, then reboot | Back to the DPI the install wrote. An install from the card also does that |
 | Switch to turn-by-turn arrows instead (no map) | Removes the map, installs the arrows. Install switches back |
 | Save logs to SD | For a problem report. Before rebooting: logs are in RAM |
 | Collect files for porting (quick) | About 2.5 MB, read only |

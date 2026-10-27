@@ -46,8 +46,32 @@ script
     label   "Test: turn card at the bottom, then reboot"
 
 script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_left.sh"
+    label   "Test: turn card top left, then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_right.sh"
+    label   "Test: turn card top right, then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_hide.sh"
+    label   "Test: hide the turn card (small space), then reboot"
+
+script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top.sh"
     label   "Turn card at the top (standard), then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/size_smaller.sh"
+    label   "Test: map smaller (DPI -10), then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/size_larger.sh"
+    label   "Test: map larger (DPI +10), then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/size_reset.sh"
+    label   "Map size as installed, then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/switch_to_turn_by_turn.sh"
