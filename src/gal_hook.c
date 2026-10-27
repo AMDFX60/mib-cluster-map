@@ -474,6 +474,24 @@ int gal_hook_init(const gal_secondary_config *config)
     } else {
         load_environment();
     }
+    /*
+     * Insets are set in the square pixels of the margin band. Without
+     * margins and with pixels wider than tall (CLUSTERMAP_FULL_FRAME), a
+     * frame row is shorter on the cluster by that ratio, so top and bottom
+     * are scaled up by it: one setting keeps the turn card in the same place
+     * in both modes, and the menu's switch needs to change nothing else.
+     * 10000 (square) changes nothing.
+     */
+    if (g_config.pixel_aspect_ratio_e4 > 0u && g_config.pixel_aspect_ratio_e4 != 10000u &&
+        g_config.pixel_aspect_ratio_e4 <= 80000u &&
+        g_config.insets_top <= 0x3fffu && g_config.insets_bottom <= 0x3fffu) {
+        unsigned top = g_config.insets_top, bottom = g_config.insets_bottom;
+        g_config.insets_top = (top * g_config.pixel_aspect_ratio_e4 + 5000u) / 10000u;
+        g_config.insets_bottom = (bottom * g_config.pixel_aspect_ratio_e4 + 5000u) / 10000u;
+        gal_hook_logf("event=config.insets result=scaled pixel_aspect_e4=%u top=%u->%u bottom=%u->%u",
+                      g_config.pixel_aspect_ratio_e4, top, g_config.insets_top,
+                      bottom, g_config.insets_bottom);
+    }
     g_enabled = environment_flag("GAL_DUALSCREEN_ENABLE");
     g_debug = environment_flag("GAL_DUALSCREEN_DEBUG");
     g_second_sink = environment_flag_default_on("GAL_DUALSCREEN_SECOND_SINK");

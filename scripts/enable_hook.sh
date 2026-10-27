@@ -68,6 +68,16 @@ else
     echo "ERROR: lib_app_mount.sh not found in $CARD_ROOT" >&2
     exit 1
 fi
+# How Android Auto's frame is fitted to the cluster map window; shared with
+# the green menu's sharper-map switch.
+if [ -f "$CARD_ROOT/scripts/lib_cluster_frame.sh" ]; then
+    . "$CARD_ROOT/scripts/lib_cluster_frame.sh"
+elif [ -f "$CARD_ROOT/lib_cluster_frame.sh" ]; then
+    . "$CARD_ROOT/lib_cluster_frame.sh"
+else
+    echo "ERROR: lib_cluster_frame.sh not found in $CARD_ROOT" >&2
+    exit 1
+fi
 
 finish()
 {
@@ -431,54 +441,35 @@ else
     echo "  cockpit in map view with the car's own navigation, then run this"
     echo "  install again."
 fi
-# Android Auto's frame is always 800x480: the phone is asked to leave
-# margins so the rest has the window's shape (none for an 800x480 window).
-# "|| :" because expr exits 1 when the answer is 0, and this runs under set -e.
-#
-# CLUSTERMAP_FULL_FRAME=1 (not car-tested): no margins, but non-square
-# pixels (pixel_aspect_ratio_e4 = 6000 * W / H, 16117 for 1010x376), so the
-# phone draws on all 480 lines, squeezed, and the player stretches the frame
-# to the window. A margin band uses only 298 of them on 1010x376. If the
-# phone ignores the ratio, the map looks stretched sideways: set it back to 0.
+# Android Auto's frame is always 800x480: margins, or with
+# CLUSTERMAP_FULL_FRAME=1 a pixel aspect ratio, give it the window's shape
+# (lib_cluster_frame.sh). The green menu's sharper-map switch changes the
+# same lines later without the card.
 FULL_FRAME=`sed -n 's/^CLUSTERMAP_FULL_FRAME=\([01]\)[ 	]*$/\1/p' \
     "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
-# The hook takes a key's first line and the player its last, so the ratio
-# must be on one line only: drop the file's own here, the one written below
-# is then the only one. Inside an if, so a failure falls back to margins
-# instead of ending the install under set -e.
-if [ "$FULL_FRAME" = 1 ]; then
-    if sed '/^[ 	]*GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4[ 	]*=/d' \
-           "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" > "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" 2>/dev/null &&
-       mv "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null; then
-        chmod 644 "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null || true
-    else
-        rm -f "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" 2>/dev/null || true
-        FULL_FRAME=0
+[ "$FULL_FRAME" = 1 ] || FULL_FRAME=0
+if [ ! -w "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" ]; then
+    FULL_FRAME=0
+    frame_geometry $MAP_W $MAP_H 0
+elif ! frame_write_conf "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" $MAP_W $MAP_H $FULL_FRAME; then
+    # Inside a condition, so a failure lands here instead of ending the
+    # install under set -e: append as before the switch existed, margins
+    # only, and the file's own pixel aspect line (10000) stays. The last
+    # CLUSTERMAP_FULL_FRAME line is the one the menu and status read.
+    if [ "$FULL_FRAME" = 1 ]; then
         echo "WARNING: could not edit the settings copy; CLUSTERMAP_FULL_FRAME ignored, using margins." >&2
     fi
-fi
-PIXEL_ASPECT_E4=10000
-if [ "$FULL_FRAME" = 1 ]; then
-    MARGIN_W=0
-    MARGIN_H=0
-    PIXEL_ASPECT_E4=`expr \( 6000 \* $MAP_W + $MAP_H / 2 \) / $MAP_H`
-    echo "Android Auto: whole 800x480 frame with pixel aspect ${PIXEL_ASPECT_E4}/10000, stretched to the window (CLUSTERMAP_FULL_FRAME, not car-tested)."
-elif [ `expr $MAP_W \* 480` -gt `expr $MAP_H \* 800` ]; then
-    MARGIN_W=0
-    MARGIN_H=`expr 480 - \( 800 \* $MAP_H + $MAP_W \) / \( 2 \* $MAP_W \) \* 2 || :`
-else
-    MARGIN_W=`expr 800 - \( 480 \* $MAP_W + $MAP_H \) / \( 2 \* $MAP_H \) \* 2 || :`
-    MARGIN_H=0
-fi
-if [ "$MARGIN_W" -gt 0 ] || [ "$MARGIN_H" -gt 0 ]; then
-    echo "Android Auto: 800x480 with ${MARGIN_W}x${MARGIN_H} margins, scaled to fill the window."
-fi
-if [ -w "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" ]; then
+    FULL_FRAME=0
+    frame_geometry $MAP_W $MAP_H 0
     { echo; echo "# Written by the installer from the cluster map window it read."
       echo "GAL_PLAYER_WINDOW=${MAP_W}x${MAP_H}"
       echo "GAL_SECONDARY_MARGINS=${MARGIN_W}x${MARGIN_H}"
-      if [ "$FULL_FRAME" = 1 ]; then echo "GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4=$PIXEL_ASPECT_E4"; fi
-    } >> "$PRELOAD_WRITE_DIR/gal_dualscreen.conf"
+      echo "CLUSTERMAP_FULL_FRAME=0"; } >> "$PRELOAD_WRITE_DIR/gal_dualscreen.conf"
+fi
+if [ "$FULL_FRAME" = 1 ]; then
+    echo "Android Auto: whole 800x480 frame with pixel aspect ${PIXEL_ASPECT_E4}/10000, stretched to the window (CLUSTERMAP_FULL_FRAME, not car-tested)."
+elif [ "$MARGIN_W" -gt 0 ] || [ "$MARGIN_H" -gt 0 ]; then
+    echo "Android Auto: 800x480 with ${MARGIN_W}x${MARGIN_H} margins, scaled to fill the window."
 fi
 
 # Install stream-player to /mnt/app/navigation
@@ -536,18 +527,19 @@ fi
 # CarPlay's safe area: the part of the window the dials do not cover, where
 # the iPhone keeps the car and its instruction card. The same
 # GAL_SECONDARY_INSETS (top,bottom,left,right) Android Auto uses, which are
-# in its 800x480 frame after margins, scaled to the window. harman-f's hook
-# reads it when the iPhone connects. Without it the whole window counts as
-# visible (Golf R: card and car under the dials).
+# in its 800x480 frame after the margins of the band (also with full frame:
+# the hook converts them), scaled to the window. harman-f's hook reads it
+# when the iPhone connects. Without it the whole window counts as visible
+# (Golf R: card and car under the dials).
 CARPLAY_SAFEAREA=$APP_MOUNT/root/mibr-carplay111-safearea.conf
 if [ "$CARPLAY_OK" -eq 1 ]; then
     INSETS=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\)[ 	]*$/\1 \2 \3 \4/p' \
         "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
     set -- ${INSETS:-40 40 127 127}
-    SAFE_Y=`expr $1 \* $MAP_H / \( 480 - $MARGIN_H \) || :`
-    SAFE_B=`expr $2 \* $MAP_H / \( 480 - $MARGIN_H \) || :`
-    SAFE_X=`expr $3 \* $MAP_W / \( 800 - $MARGIN_W \) || :`
-    SAFE_R=`expr $4 \* $MAP_W / \( 800 - $MARGIN_W \) || :`
+    SAFE_Y=`expr $1 \* $MAP_H / \( 480 - $BAND_MARGIN_H \) || :`
+    SAFE_B=`expr $2 \* $MAP_H / \( 480 - $BAND_MARGIN_H \) || :`
+    SAFE_X=`expr $3 \* $MAP_W / \( 800 - $BAND_MARGIN_W \) || :`
+    SAFE_R=`expr $4 \* $MAP_W / \( 800 - $BAND_MARGIN_W \) || :`
     SAFE_W=`expr $MAP_W - $SAFE_X - $SAFE_R || :`
     SAFE_H=`expr $MAP_H - $SAFE_Y - $SAFE_B || :`
     # echo, not printf: some units have no printf binary

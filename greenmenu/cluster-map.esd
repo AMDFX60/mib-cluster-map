@@ -34,6 +34,14 @@ script
     label   "Uninstall and restore original state"
 
 script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/full_frame_on.sh"
+    label   "Test: sharper map ON (whole frame), then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/full_frame_off.sh"
+    label   "Test: sharper map OFF (standard), then reboot"
+
+script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/switch_to_turn_by_turn.sh"
     label   "Switch to turn-by-turn arrows instead (no map)"
 

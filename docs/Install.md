@@ -96,6 +96,8 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | 1. Status and compatibility check | Firmware train, verdict, what is installed, Java patches |
 | 2. Install cluster map | The same installer as route 1 |
 | Uninstall and restore original state | Full revert |
+| Test: sharper map ON (whole frame), then reboot | Switches `CLUSTERMAP_FULL_FRAME` on in the unit's copy of the settings, without editing the card. Not yet car-tested; see [Cluster map window](#cluster-map-window) |
+| Test: sharper map OFF (standard), then reboot | Back to the margins. An install from the card also writes the card's setting again |
 | Switch to turn-by-turn arrows instead (no map) | Removes the map, installs the arrows. Install switches back |
 | Save logs to SD | For a problem report. Before rebooting: logs are in RAM |
 | Collect files for porting (quick) | About 2.5 MB, read only |
@@ -159,8 +161,12 @@ The margins cost sharpness: on 1010×376 only 298 of the frame's 480 lines
 carry map, enlarged to fill the window. `CLUSTERMAP_FULL_FRAME=1` (not yet
 car-tested) asks the phone to draw on the whole frame with non-square pixels
 instead (`GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4`, 16117 for 1010×376), and the
-player stretches it to the window. If the map then looks stretched sideways,
-the phone ignored the ratio: set it back to 0 and install again.
+player stretches it to the window. The insets keep their place: the hook
+converts top and bottom. To compare in the car, use the green menu's **Test:
+sharper map ON** and **OFF** entries (reboot after each); they change only the
+unit's copy of the settings. A screen added before this version has no such
+entries: run route 1 once to update it. If the map looks stretched sideways,
+the phone ignored the ratio: switch it off again.
 
 ## Settings
 
