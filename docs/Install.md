@@ -96,8 +96,10 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | 1. Status and compatibility check | Firmware train, verdict, what is installed, Java patches |
 | 2. Install cluster map | The same installer as route 1 |
 | Uninstall and restore original state | Full revert |
-| Test: sharper map ON (whole frame), then reboot | Switches `CLUSTERMAP_FULL_FRAME` on in the unit's copy of the settings, without editing the card. Not yet car-tested; see [Cluster map window](#cluster-map-window) |
+| Test: sharper map ON (whole frame), then reboot | Switches `CLUSTERMAP_FULL_FRAME` on in the unit's copy of the settings, without editing the card; see [Cluster map window](#cluster-map-window). This fork installs it on |
 | Test: sharper map OFF (standard), then reboot | Back to the margins. An install from the card also writes the card's setting again |
+| Test: turn card at the bottom, then reboot | Only for a 1010×376 window: the turn card in a band at the bottom, between the two lower segments, so it no longer covers the road ahead. Google Maps places its card at the top of the space the insets leave, so that space becomes the band. Not yet car-tested: where Maps then puts the car is up to Maps |
+| Turn card at the top (standard), then reboot | Back to the settings' own insets. An install from the card also does that |
 | Switch to turn-by-turn arrows instead (no map) | Removes the map, installs the arrows. Install switches back |
 | Save logs to SD | For a problem report. Before rebooting: logs are in RAM |
 | Collect files for porting (quick) | About 2.5 MB, read only |
@@ -164,8 +166,9 @@ phone to draw on the whole frame with non-square pixels instead
 stretches it to the window. On a Skoda P4526 the phone honoured the ratio but,
 at the same DPI, showed more map rather than finer map, so the hook now scales
 DPI and all four insets by the ratio: the map keeps its scale and the turn card
-its place, with about 1.6 times the lines upwards (across stays 800). That
-second step is not yet car-tested. To compare in the car, use the green menu's **Test:
+its place, with about 1.6 times the lines upwards (across stays 800). On the
+Skoda that came out a little sharper, with the turn card placed better, and
+this fork installs it on. To compare in the car, use the green menu's **Test:
 sharper map ON** and **OFF** entries (reboot after each); they change only the
 unit's copy of the settings. A screen added before this version has no such
 entries: run route 1 once to update it. If the map looks stretched sideways,
@@ -178,10 +181,10 @@ the unit's copy is refreshed, and reboot. The file documents every key.
 
 | Setting | Shipped | Change it when |
 |---|---|---|
-| `GAL_SECONDARY_DPI` | 125 | map text and turn card too big (lower) or too small (higher) |
+| `GAL_SECONDARY_DPI` | 110 (this fork: smaller turn card on the Skoda) | map text and turn card too big (lower) or too small (higher) |
 | `GAL_SECONDARY_INSETS` | 40,127,127,127 (this fork: Skoda P4526) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
 | `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark |
-| `CLUSTERMAP_FULL_FRAME` | 0 | the map looks blurred on a cluster map window that is not 800×480: 1 uses the whole frame, see [Cluster map window](#cluster-map-window). Not yet car-tested |
+| `CLUSTERMAP_FULL_FRAME` | 1 (this fork) | 1 uses the whole frame on a cluster map window that is not 800×480: a little sharper, see [Cluster map window](#cluster-map-window). 0 goes back to the margins |
 | `CLUSTERMAP_KEEP_ARROWS` | 0 | 1 keeps the turn-arrows jar with the map (adds it if missing): map, arrows and music together on SEAT. Not on VW: the map goes blank when a route starts |
 | `CLUSTERMAP_ADD_NAVIGNORE` | 0 | the map goes as soon as a route starts, on firmware where the installer does not add `NavActiveIgnore` by itself. 1 adds it, with a backup, and uninstall removes it. It edits the script that starts the centre screen, so check SSH works first |
 | `CLUSTERMAP_CARPLAY_TRIAL` | unset | the installer refuses the CarPlay map because this unit's `libairplay.so` is a different build. Put the size it prints here to allow the attempt; the hook still checks every symbol it patches and leaves CarPlay stock if they do not fit. See [CarPlay](CarPlay.md) |

@@ -42,6 +42,14 @@ script
     label   "Test: sharper map OFF (standard), then reboot"
 
 script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_bottom.sh"
+    label   "Test: turn card at the bottom, then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top.sh"
+    label   "Turn card at the top (standard), then reboot"
+
+script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/switch_to_turn_by_turn.sh"
     label   "Switch to turn-by-turn arrows instead (no map)"
 

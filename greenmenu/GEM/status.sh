@@ -18,6 +18,13 @@ if [ -r "$UNIT_CONF" ]; then
     else
         echo "  window ${w:-unknown}, sharper-map test: off (margins ${m:-unknown})"
     fi
+    i=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9,]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
+    d=`sed -n 's/^GAL_SECONDARY_DPI=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
+    if grep -q '^CLUSTERMAP_CARD_TOP_INSETS=' "$UNIT_CONF"; then
+        echo "  turn card: at the bottom (test), insets ${i:-unknown}, DPI ${d:-unknown}"
+    else
+        echo "  turn card: at the top, insets ${i:-unknown}, DPI ${d:-unknown}"
+    fi
 fi
 if grep -q 'libcarplay_cluster.so' "$CONFIG" 2>/dev/null; then
     echo "CarPlay map: installed, `sed -n 's/.*"ALTSCREEN111_WIDTH=\([0-9]*\)", "ALTSCREEN111_HEIGHT=\([0-9]*\)".*/\1x\2/p' "$CONFIG"`"
