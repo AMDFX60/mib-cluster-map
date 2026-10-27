@@ -83,15 +83,6 @@ build_hook() {
     n=$($P-nm build/libgal_hook.so | grep -ci emutls || true)
     [ "$n" = "0" ] || { echo "REJECTED: emutls symbols present"; exit 1; }
     $P-readelf -d build/libgal_hook.so | grep NEEDED
-    # CarPlay: one library for dio_manager'"'"'s single LD_PRELOAD entry --
-    # harman-f'"'"'s cluster-stream hook, unmodified and with its own build flags,
-    # plus the launcher that starts carplay_cluster.sh.
-    A=thirdparty/mhi2_altscreen_carplay
-    $P-gcc -shared -fPIC -mfloat-abi=softfp -O2 -std=gnu99 -Wall -Wextra -I$A/include \
-        $A/libaltscreen111_gen2.c $A/src/alt111_profile.c $A/src/alt111_control.c \
-        $A/src/alt111_video.c $A/src/alt111_resync.c carplay/carplay_launcher.c \
-        -Wl,-soname,libcarplay_cluster.so -lsocket -o build/libcarplay_cluster.so
-    $P-strip --strip-debug build/libcarplay_cluster.so
   '
 }
 
@@ -155,18 +146,18 @@ package() {
   rm -rf "$S"; mkdir -p "$D/scripts" "$D/lib" "$D/GEM" "$D/docs" "$S/Custom/GreenMenu"
   cp "$ROOT/build/libgal_hook.so" "$ROOT/build/stream-player" "$D/"
   cp "$ROOT/build/libdmdt_flush.so" "$D/lib/"
-  mkdir -p "$D/carplay"
-  cp "$ROOT/build/libcarplay_cluster.so" "$ROOT/carplay/carplay_cluster.sh" "$D/carplay/"
-  cp "$ROOT/thirdparty/mhi2_altscreen_carplay/LICENSE" "$D/carplay/mhi2_altscreen_carplay.LICENSE"
   # The install scripts treat their own folder as the package root.
   cp "$ROOT"/scripts/enable_hook.sh "$ROOT"/scripts/disable_hook.sh "$ROOT"/scripts/collect_logs.sh \
      "$ROOT"/scripts/turn_by_turn.sh "$ROOT"/scripts/lsd_jar.sh "$D/"
   mkdir -p "$D/thirdparty" && cp "$ROOT"/thirdparty/mib2-android-auto-vc/VCAndroidAuto.jar "$D/thirdparty/" && \
      cp "$ROOT"/thirdparty/mib2-android-auto-vc/LICENSE "$D/thirdparty/VCAndroidAuto.LICENSE"
   cp "$ROOT"/thirdparty/mib2-toolbox/NavActiveIgnore.jar "$D/thirdparty/" && cp "$ROOT"/thirdparty/mib2-toolbox/LICENSE "$D/thirdparty/NavActiveIgnore.LICENSE"
+  # The same jar sending the cockpit 30 instead of 20 frames a second, for the
+  # green menu's frame-rate switch.
+  python3 "$ROOT/tools/make_rate_jar.py" "$ROOT"/thirdparty/mib2-toolbox/NavActiveIgnore.jar "$D/thirdparty/NavActiveIgnore30.jar" 30
   cp "$ROOT/scripts/lib_app_mount.sh" "$ROOT/scripts/hook_status.sh" "$ROOT/scripts/lib_resolve_hook_log.sh" \
      "$ROOT/scripts/lib_cluster_frame.sh" "$ROOT/scripts/full_frame.sh" "$ROOT/scripts/card_layout.sh" \
-     "$ROOT/scripts/map_size.sh" "$D/scripts/"
+     "$ROOT/scripts/map_size.sh" "$ROOT/scripts/map_rate.sh" "$D/scripts/"
   cp "$ROOT"/greenmenu/GEM/*.sh "$D/GEM/"
   cp "$ROOT/greenmenu/cluster-map.esd" "$S/Custom/GreenMenu/"
   # Software-update route: the same screen, copied to the unit by the update
@@ -185,9 +176,9 @@ package() {
   cp "$ROOT/README.md" "$ROOT/docs/Install.md" "$D/docs/"
   cp "$ROOT/LICENSE" "$D/LICENSE"
   # The unit's shell needs LF line endings and plain ASCII in everything it runs.
-  bad=$(perl -ne 'if (/\r|[^\x00-\x7F]/) { print "$ARGV\n"; close ARGV }' "$D"/*.sh "$D"/scripts/*.sh "$D"/GEM/*.sh "$D"/final/*.sh "$D"/carplay/*.sh "$S"/Custom/GreenMenu/*.esd "$D"/gal_dualscreen.conf | sort -u)
+  bad=$(perl -ne 'if (/\r|[^\x00-\x7F]/) { print "$ARGV\n"; close ARGV }' "$D"/*.sh "$D"/scripts/*.sh "$D"/GEM/*.sh "$D"/final/*.sh "$S"/Custom/GreenMenu/*.esd "$D"/gal_dualscreen.conf | sort -u)
   [ -z "$bad" ] || { echo "REJECTED: CR or non-ASCII in: $bad"; exit 1; }
-  (cd "$D" && shasum -a 256 libgal_hook.so stream-player lib/libdmdt_flush.so carplay/libcarplay_cluster.so > SHA256SUMS.txt)
+  (cd "$D" && shasum -a 256 libgal_hook.so stream-player lib/libdmdt_flush.so > SHA256SUMS.txt)
   python3 "$ROOT/tools/make_metainfo.py" "$S" "${RELEASE_VERSION:-$BUILD_ID}"
   VER=${RELEASE_VERSION:-$BUILD_ID}
   Z="$ROOT/dist/mib-cluster-map_$VER.zip"

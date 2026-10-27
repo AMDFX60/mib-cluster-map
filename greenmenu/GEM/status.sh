@@ -38,15 +38,20 @@ if [ -r "$UNIT_CONF" ]; then
     fi
 fi
 if grep -q 'libcarplay_cluster.so' "$CONFIG" 2>/dev/null; then
-    echo "CarPlay map: installed, `sed -n 's/.*"ALTSCREEN111_WIDTH=\([0-9]*\)", "ALTSCREEN111_HEIGHT=\([0-9]*\)".*/\1x\2/p' "$CONFIG"`"
-    if [ -r /tmp/mibr-carplay111.state ]; then echo "  CarPlay cluster stream: `cat /tmp/mibr-carplay111.state`"; else echo "  CarPlay cluster stream: none yet (connect an iPhone)"; fi
-else
-    a=`wc -c < /mnt/app/eso/lib/libairplay.so 2>/dev/null | sed 's/ //g'`
-    if [ "$a" = 703688 ]; then echo "CarPlay map: not installed (this unit's CarPlay library is supported)"; else echo "CarPlay map: not installed (CarPlay library ${a:-missing} bytes; supported: 703688)"; fi
+    echo "CarPlay map: left by an older package. Install again to remove it."
 fi
 if sh "$PKG/lsd_jar.sh" loaded NavActiveIgnore.jar; then echo "NavActiveIgnore: loaded (required)"
 elif sh "$PKG/lsd_jar.sh" loaded CarPlayNavigationPatch.jar; then echo "NavActiveIgnore: loaded as CarPlay's CarPlayNavigationPatch.jar (same patch)"
 else echo "NavActiveIgnore: not loaded (Install adds it on tested firmware)"; fi
+j=/mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar
+if [ -r "$j" ] && sh "$PKG/lsd_jar.sh" loaded NavActiveIgnore.jar; then
+    r=`wc -c < "$j" | sed 's/ //g'`
+    case "$r" in
+        "`wc -c < "$PKG/thirdparty/NavActiveIgnore.jar" 2>/dev/null | sed 's/ //g'`") echo "  cockpit map: 20 frames a second" ;;
+        "`wc -c < "$PKG/thirdparty/NavActiveIgnore30.jar" 2>/dev/null | sed 's/ //g'`") echo "  cockpit map: 30 frames a second (test)" ;;
+        *) echo "  cockpit map rate: not this package's jar ($r bytes)" ;;
+    esac
+fi
 if sh "$PKG/lsd_jar.sh" loaded VCAndroidAuto.jar; then echo "Turn-by-turn arrows (VCAndroidAuto.jar): loaded. Installing the map turns this off."; else echo "Turn-by-turn arrows (VCAndroidAuto.jar): not loaded"; fi
 echo "Java patch lines:"
 grep -n 'Xbootclasspath/p' "$LSD" 2>/dev/null | sed 's|.*/p:||; s|\$BASE_DIR/lsd/jars/||g; s|"$||; s|^|  |'

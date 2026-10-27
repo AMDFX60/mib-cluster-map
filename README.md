@@ -41,8 +41,10 @@ navigation map.
 | Turn card (`GAL_SECONDARY_INSETS`) | 40,40,127,127: the card at the top | **134,104,0,0: hidden**. Google Maps leaves its card out when the space it gets is too short for it, so the map shows without the green card, and the car sits in the lower half, for more road ahead. The green menu shows the card again for a test |
 | Day/night (`GAL_SECONDARY_UI_THEME`) | 2, always night | **0, automatic**: follows the car's light sensor, as on the centre screen |
 | Cockpit window (`GAL_PLAYER_WINDOW`) | Taken from the display manager | Also preset to **1010×376**, so a first install fits even before the cockpit has shown its own map |
+| Player priority (`GAL_PLAYER_PRIORITY`) | As spawned (10) | **12**: a little higher, so the system's compositor holds up the cockpit map less |
+| CarPlay map | Installed where the unit's CarPlay library fits | **None**. This fork is Android Auto only; installing it removes a CarPlay map an older package added, and CarPlay itself stays stock |
 | Insets above 127 | Often too long for the message, and then none are sent | Sent: the automatic theme is left out of the message so they fit; if they still do not fit, each is cut to 127 and the log says so |
-| Green menu | Status, logs, uninstall, arrows switch | **Also** the sharper map on and off, test positions for the turn card, and the map size ([below](#green-menu-switches)) |
+| Green menu | Status, logs, uninstall, arrows switch | **Also** the sharper map on and off, test positions for the turn card, the map size and the cockpit frame rate ([below](#green-menu-switches)) |
 | Building | Linux, macOS | **Also Windows**: Git Bash and Docker Desktop |
 
 Releases are named `mib-cluster-map_v1.1.2-skoda.zip`, test versions
@@ -95,8 +97,8 @@ up into `ClusterMap`, and run the same update again.
 
 ## Green menu switches
 
-Each changes only the unit's own copy of the settings and takes effect after a
-reboot. The turn card tests are measured for the 1010×376 window at DPI 110.
+Each changes only the unit's own copy of the settings (the frame rate: the
+unit's copy of `NavActiveIgnore.jar`) and takes effect after a reboot. The turn card tests are measured for the 1010×376 window at DPI 110.
 
 | Entry | What it does | On the Superb |
 |---|---|---|
@@ -105,6 +107,7 @@ reboot. The turn card tests are measured for the 1010×376 window at DPI 110.
 | Test: show the turn card at the bottom | The card in a band at the bottom, between the two lower segments | Not tested yet |
 | Turn card as installed (hidden) | Back to the installed settings: no card | Hiding car-tested (beta12): no card, the car centred, the route ahead visible. The lower car of 1.1.2 is not tested yet |
 | Test: map smaller / larger (DPI -10 / +10), Map size as installed | The map and its text smaller or larger, between DPI 80 and 170 | Not tested yet |
+| Test: cockpit map 30 fps mode / Cockpit map 20 fps mode (standard) | The unit sends the cockpit its map picture 30 instead of 20 times a second (stock firmware: 10), through a copy of `NavActiveIgnore.jar` that differs only in that number. The idea comes from [omonob/MHI2-Carplay-Maps](https://github.com/omonob/MHI2-Carplay-Maps) | Not tested yet |
 
 Moving the card to the left or right was tried in beta12 and dropped: Google
 Maps keeps the card centred above the car, so the car and the whole view moved
@@ -122,7 +125,7 @@ with it.
 | Turn card hidden (the standard from 1.1.2) | Car-tested (beta12); the car lower in 1.1.2 not tested yet |
 | Turn card at the bottom, map size | Not tested yet |
 | Turn-arrows jar beside the map (`CLUSTERMAP_KEEP_ARROWS=1`) | Not tested on a Skoda |
-| CarPlay map | In the package from upstream, not tested on a Skoda ([CarPlay](docs/CarPlay.md)) |
+| Cockpit map at 30 fps, player priority 12 (from 1.1.3) | Not tested yet |
 | Hardware video decoding (`GAL_PLAYER_DECODER=hw`) | Fails and falls back to software decoding (upstream, under investigation) |
 
 Not possible so far: moving the turn card without the car (Google Maps places
@@ -137,7 +140,8 @@ the car's map from the steering wheel.
 | Skoda Superb, `MHI2_ER_SKG13_P4526` | **Map**, tested with this fork |
 | Other Skoda with the Harman unit, `MHI2_ER_SKG13_` | Not tested. Run the update: the installer checks the real firmware, installs only what fits, and otherwise collects the files needed to add the unit (see [Getting your unit added](docs/Install.md#getting-your-unit-added)) |
 | SEAT `MHI2_ER_SEG11_P4708` and `P4709` | Same 1010×376 window, so these settings may suit it; not tested with this fork |
-| VW, Audi, CarPlay | The code is upstream's and still knows every unit it supports, but the settings here are tuned for the Skoda. Use [upstream's releases](https://github.com/MacsInSpace/mib-cluster-map/releases) |
+| VW, Audi | The code is upstream's and still knows every unit it supports, but the settings here are tuned for the Skoda. Use [upstream's releases](https://github.com/MacsInSpace/mib-cluster-map/releases) |
+| CarPlay | Not in this fork. Upstream has a CarPlay map |
 
 You need the Virtual Cockpit for the map. The firmware train is on the green
 menu **Status** screen. A unit whose train does not start with `MHI2_ER_`
@@ -164,7 +168,6 @@ once. Details are in
 | Page | For |
 |---|---|
 | [Install guide](docs/Install.md) | Install routes, the menu, settings, logs, safety and recovery, getting your unit added |
-| [CarPlay](docs/CarPlay.md) | The CarPlay map: design, status, testing |
 | [Development](docs/Development.md) | How it works, what was learned, adding a firmware, building |
 
 ## Reporting a problem
@@ -194,16 +197,18 @@ contain phone names and Bluetooth addresses.
 - **adi961**: mib2-android-auto-vc, the turn-arrows jar. Bundled under
   `thirdparty/` (MIT) as the arrows mode, built from
   [upstream's maintained fork](https://github.com/MacsInSpace/mib2-android-auto-vc).
-- **harman-f** ([mhi2_altscreen_carplay](https://github.com/harman-f/mhi2_altscreen_carplay))
-  and **aberbic** ([Audi MHI2 AltScreen](https://github.com/aberbic/Audi-MHI2-Virtual-Cockpit-Altscreen-CarPlay-AndroidAuto)):
-  the open CarPlay cluster work the CarPlay map builds on. harman-f's hook is
-  included from source under GPL-3.0.
+- **aberbic** ([Audi MHI2 AltScreen](https://github.com/aberbic/Audi-MHI2-Virtual-Cockpit-Altscreen-CarPlay-AndroidAuto)):
+  the decoder layout the player's hardware-decoding path uses.
+- **omonob** ([MHI2-Carplay-Maps](https://github.com/omonob/MHI2-Carplay-Maps)):
+  the cockpit frame rate in `ChangeDataRateSequence`, the idea behind the
+  30 fps switch.
 - **Mr-MIBonk** ([M.I.B.](https://github.com/Mr-MIBonk/M.I.B._More-Incredible-Bash)):
   the `Swdlautorun.txt` trigger for installing without the service menu.
 - **lito69**, **tulio150** and **DaniFR3**: car tests and porting files for
   the SEAT and the settings.
 - **kamgurgul**, **wasimlhr** and **luka-dev**: the MHI2Q projects whose notes
-  led to the connection-loop fix, and the open QNX toolchain.
+  led to the connection-loop fix, the player priority, and the open QNX
+  toolchain.
 - **FFmpeg**: H.264 decoding, statically linked, LGPL v2.1 or later.
 
 ## License

@@ -41,12 +41,6 @@ else
     echo "NOTE: no cockpit display (context 70) at this moment. That is normal" >> $OUT/dmdt_gs.txt
     echo "unless the cockpit was in map view when these logs were saved." >> $OUT/dmdt_gs.txt
 fi
-# CarPlay map: the supervisor, its player, and harman-f's hook state.
-mkdir -p $OUT/carplay
-cp /tmp/carplay_cluster.log /tmp/stream-player-carplay.log /tmp/altscreen111.log \
-   /tmp/mibr-carplay111.state /tmp/mibr-carplay111.heartbeat /tmp/mibr-alt111-gen2.status $OUT/carplay/ 2>/dev/null
-grep -n -e dio_manager -e libcarplay -e ALTSCREEN111 /mnt/system/etc/eso/production/smartphone_integrator.json > $OUT/carplay/config_lines.txt 2>&1
-grep -n carplay0 /mnt/system/etc/pf*.conf > $OUT/carplay/firewall_lines.txt 2>&1
 sync 2>/dev/null
 ls -l $OUT
 echo "Done: ClusterMap/run_logs/$N. Wait a few seconds, then take the SD card to the laptop."

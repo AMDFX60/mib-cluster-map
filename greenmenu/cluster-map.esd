@@ -66,6 +66,14 @@ script
     label   "Map size as installed, then reboot"
 
 script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/rate_30.sh"
+    label   "Test: cockpit map 30 fps mode, then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/rate_20.sh"
+    label   "Cockpit map 20 fps mode (standard), then reboot"
+
+script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/switch_to_turn_by_turn.sh"
     label   "Switch to turn-by-turn arrows instead (no map)"
 

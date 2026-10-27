@@ -141,7 +141,7 @@ if [ -d "$PRELOAD_WRITE_DIR" ] || [ -f "$APP_MOUNT/eso/lib/libdmdt_flush.so" ] |
     if mount -uw "$APP_MOUNT" 2>/dev/null; then
         APP_WRITABLE=1
         rm -f "$APP_MOUNT/eso/lib/libdmdt_flush.so" 2>/dev/null || true
-        # The CarPlay map's safe area, read only by its hook.
+        # The safe area the CarPlay map of packages before 1.1.3 left.
         rm -f "$APP_MOUNT/root/mibr-carplay111-safearea.conf" 2>/dev/null || true
         # enable_hook.sh put the player here; nothing else on the unit uses it.
         if rm -f "$APP_MOUNT/navigation/stream-player" 2>/dev/null; then
@@ -168,6 +168,11 @@ trap - 0 1 2 15
 # with --keep-jar-removed. A failure leaves lsd.sh untouched and is reported.
 if [ "${1:-}" != "--keep-jar-removed" ] && [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
     echo
+    # The green menu's 30 fps test: the package's 20 fps jar back, before the
+    # line goes below or for an owner's own NavActiveIgnore line that stays.
+    if [ -r "$CARD_ROOT/scripts/map_rate.sh" ]; then
+        RATE_OUT=`sh "$CARD_ROOT/scripts/map_rate.sh" 20 2>&1` && echo "$RATE_OUT"
+    fi
     if [ -f /mnt/app/eso/hmi/lsd/.aacluster_tbt_removed ]; then
         sh "$CARD_ROOT/turn_by_turn.sh" restore || \
             echo "WARNING: could not restore the turn-by-turn jar line; lsd.sh is unchanged." >&2

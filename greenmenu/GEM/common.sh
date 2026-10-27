@@ -41,14 +41,8 @@ SUPPORT_NOTE=
 # generation links libautoreceiver_qnx.so.1 beside libaoa-lite instead
 # (issue #28: Vladimir's K3342 gal names it in its DT_NEEDED), so a unit with
 # no libautoreceiver.so has not necessarily no receiver.
-#
-# CarPlay: libairplay.so, which the CarPlay hook attaches to by exported
-# symbol name. Collected for the same reason as the receiver -- it is what a
-# port has to be checked against, and asking for it afterwards costs a round
-# trip (issue #10, US P3662, whose build differs from the tested one).
 LIB_DIRS="/mnt/app/eso/lib /eso/lib /mnt/app/armle/lib /mnt/app/usr/lib /mnt/app/root/lib-target"
 RECEIVER_NAMES="libautoreceiver.so libautoreceiver_qnx.so.1"
-AIRPLAY_NAMES="libairplay.so"
 # First readable file among the names given, in the library folders.
 lib_path()
 {
@@ -60,7 +54,6 @@ lib_path()
     return 1
 }
 receiver_path() { lib_path $RECEIVER_NAMES; }
-airplay_path()  { lib_path $AIRPLAY_NAMES; }
 train_supported()
 {
     for t in $SUPPORTED_TRAINS; do

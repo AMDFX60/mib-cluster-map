@@ -69,11 +69,6 @@ if ! take_lib 'the Android Auto receiver' 'libautoreceive*' $RECEIVER_NAMES; the
     done
     [ -n "$needs" ] && say "gal asks for:$needs"
 fi
-# The CarPlay library, for a CarPlay port. Its absence is not a problem for
-# the Android Auto map, so it is only noted.
-if ! take_lib 'the CarPlay library' 'libairplay*' $AIRPLAY_NAMES; then
-    say "missing libairplay.so (CarPlay library): CarPlay cannot be ported from this collection"
-fi
 # Configuration the installer edits or reads.
 take /mnt/system/etc/eso/production/smartphone_integrator.json
 take /mnt/system/etc/eso/production/gal.json

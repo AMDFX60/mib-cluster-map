@@ -38,18 +38,11 @@ SYSTEM_WRITABLE=0
 SYSTEM_TEMP=
 KEEP_TBT=0
 KEEP_NAVIGNORE=0
-CARPLAY=1
-# The CarPlay map: harman-f's cluster-stream hook (in libcarplay_cluster.so)
-# patches functions of this exact CarPlay library, so it is installed only on
-# a unit whose libairplay.so has this size (SHA-256 193a4fd9...46b5 on MU1440
-# and MU1367). The hook also checks the function prologues itself and leaves
-# CarPlay stock on a mismatch.
-# Resolved below over the same folders the collector uses: a unit that keeps
-# it only at /eso/lib would otherwise be reported as having no CarPlay at all.
-AIRPLAY_LIB=/mnt/app/eso/lib/libairplay.so
-AIRPLAY_SIZE=703688
-CARPLAY_PRELOAD=/mnt/app/eso/lib/gal_dualscreen/libcarplay_cluster.so
-CARPLAY_OK=0
+# This fork has no CarPlay map. Packages before 1.1.3 installed harman-f's
+# CarPlay hook on units whose CarPlay library they knew; an install now takes
+# what they left out again (the supervisor config is rebuilt from the original
+# anyway).
+CARPLAY_LEFTOVERS="libcarplay_cluster.so libcarplay_cluster.so.new carplay_cluster.sh"
 
 # The preload target lives on the internal /mnt/app partition instead of the
 # SD card. The SD card mounts read-only again on every fresh boot unless
@@ -111,7 +104,6 @@ usage()
     echo "                    because the cluster map fails when a route starts"
     echo "                    while that jar is active."
     echo "  --no-navignore    do not add the NavActiveIgnore patch when it is missing"
-    echo "  --no-carplay      install the Android Auto map only, not the CarPlay map"
     echo "  --no-second-sink  register no second video service"
     echo "  --no-inject-meta  write no display_id/display_type fields"
     echo
@@ -241,7 +233,7 @@ while [ $# -gt 0 ]; do
         --no-debug) DEBUG=0; shift ;;
         --keep-turn-by-turn) KEEP_TBT=1; shift ;;
         --no-navignore) KEEP_NAVIGNORE=1; shift ;;
-        --no-carplay) CARPLAY=0; shift ;;
+        --no-carplay) shift ;;  # no CarPlay map any more; older menus pass it
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
@@ -393,33 +385,11 @@ WITH_ARROWS=0
 if [ "`sed -n 's/^CLUSTERMAP_KEEP_ARROWS=\([01]\)[ 	]*$/\1/p' "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`" = 1 ]; then
     WITH_ARROWS=1; KEEP_TBT=1
 fi
-# CLUSTERMAP_CARPLAY_TRIAL=<size in bytes>: install the CarPlay map on a unit
-# whose libairplay.so is a different build from the one the hook was written
-# against, for testing. This is the CarPlay equivalent of GAL_PROFILE_TRIAL.
-#
-# It is a weaker gate than it looks, in the safe direction: the hook attaches
-# by exported symbol name (AirPlayReceiverSessionStart and nine others), not
-# by address, and it compares the first eight bytes of every function it
-# trampolines before touching it -- "prologue mismatch" in its log, and
-# CarPlay stays stock. So a stated size allows an attempt that the hook can
-# still refuse, rather than a blind patch of an unknown binary. Asked for in
-# #10 (US P3662, whose CarPlay library is a different build).
-AIRPLAY_TRIAL=`sed -n 's/^CLUSTERMAP_CARPLAY_TRIAL=\([0-9]*\)[ 	]*$/\1/p' \
-    "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
-for d in /mnt/app/eso/lib /eso/lib /mnt/app/armle/lib /mnt/app/usr/lib /mnt/app/root/lib-target; do
-    if [ -r "$d/libairplay.so" ]; then AIRPLAY_LIB="$d/libairplay.so"; break; fi
-done
-AIRPLAY_NOW=`wc -c < $AIRPLAY_LIB 2>/dev/null | sed 's/ //g'`
-AIRPLAY_ALLOWED=0
-[ "$AIRPLAY_NOW" = "$AIRPLAY_SIZE" ] && AIRPLAY_ALLOWED=1
-[ -n "$AIRPLAY_TRIAL" ] && [ "$AIRPLAY_NOW" = "$AIRPLAY_TRIAL" ] && AIRPLAY_ALLOWED=1
-
 # The cluster map window. The cluster's encoder expects the window it shows
 # to be this size; an 800x480 window on a cluster whose map window is, say,
 # 1010x376 arrives as stripes (SEAT P4708, issue #4). So the player opens its
 # window at the stock Kombi map window's size: Android Auto's 800x480 frame
-# is drawn into it at its own shape, and CarPlay is asked for that size
-# outright. dmdt gd prints one line per window: ID, type, "W x H", buffers,
+# is drawn into it at its own shape. dmdt gd prints one line per window: ID, type, "W x H", buffers,
 # name; 33 is the stock Kombi map.
 MAP_SIZE=`( cd /eso && LD_PRELOAD="$PRELOAD_WRITE_DIR/libdmdt_flush.so" \
     LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib IPL_CONFIG_DIR=/etc/eso/production \
@@ -498,72 +468,13 @@ if [ -x "$CARD_ROOT/stream-player" ]; then
     fi
 fi
 
-# The CarPlay map, when this unit's CarPlay library is the one the hook knows.
-CARPLAY_WHY=
-if [ "$CARPLAY" -eq 0 ]; then
-    CARPLAY_WHY="not requested (--no-carplay)"
-elif [ ! -r "$CARD_ROOT/carplay/libcarplay_cluster.so" ] || [ ! -r "$CARD_ROOT/carplay/carplay_cluster.sh" ]; then
-    CARPLAY_WHY="its files are not in this package"
-elif [ "$AIRPLAY_ALLOWED" -ne 1 ]; then
-    if [ -z "$AIRPLAY_NOW" ]; then
-        CARPLAY_WHY="this unit has no $AIRPLAY_LIB"
-    elif [ -n "$AIRPLAY_TRIAL" ]; then
-        CARPLAY_WHY="this unit's CarPlay library is a different build ($AIRPLAY_NOW bytes), and CLUSTERMAP_CARPLAY_TRIAL says $AIRPLAY_TRIAL"
-    else
-        CARPLAY_WHY="this unit's CarPlay library is a different build ($AIRPLAY_NOW bytes); CLUSTERMAP_CARPLAY_TRIAL=$AIRPLAY_NOW would allow an attempt"
+# What the CarPlay map of an older package left on the unit.
+for f in $CARPLAY_LEFTOVERS; do
+    if [ -f "$PRELOAD_WRITE_DIR/$f" ]; then
+        rm -f "$PRELOAD_WRITE_DIR/$f" && echo "Removed the old CarPlay map's $f"
     fi
-elif [ -d "$APP_MOUNT/carplaymaps" ] || grep -q carplaymaps "$APP_MOUNT/eso/bin/apps/dio_manager" 2>/dev/null; then
-    CARPLAY_WHY="CarPlay Maps VC is installed; uninstall it first to use this one"
-else
-    cp "$CARD_ROOT/carplay/libcarplay_cluster.so" "$PRELOAD_WRITE_DIR/libcarplay_cluster.so.new" && \
-        cp "$CARD_ROOT/carplay/carplay_cluster.sh" "$PRELOAD_WRITE_DIR/carplay_cluster.sh" && \
-        [ "`wc -c < $CARD_ROOT/carplay/libcarplay_cluster.so`" = "`wc -c < $PRELOAD_WRITE_DIR/libcarplay_cluster.so.new`" ] && \
-        chmod 755 "$PRELOAD_WRITE_DIR/libcarplay_cluster.so.new" "$PRELOAD_WRITE_DIR/carplay_cluster.sh" && \
-        mv "$PRELOAD_WRITE_DIR/libcarplay_cluster.so.new" "$PRELOAD_WRITE_DIR/libcarplay_cluster.so" && CARPLAY_OK=1
-    if [ "$CARPLAY_OK" -eq 1 ]; then
-        echo "Installed the CarPlay map files to: $PRELOAD_WRITE_DIR"
-        if [ "$AIRPLAY_NOW" != "$AIRPLAY_SIZE" ]; then
-            echo "CarPlay map: UNTESTED CarPlay library ($AIRPLAY_NOW bytes), allowed by"
-            echo "             CLUSTERMAP_CARPLAY_TRIAL. The hook checks the functions it"
-            echo "             attaches to and leaves CarPlay stock if they differ; look for"
-            echo "             'missing symbol' or 'prologue mismatch' in carplay/altscreen111.log."
-        fi
-    else
-        rm -f "$PRELOAD_WRITE_DIR/libcarplay_cluster.so.new"
-        CARPLAY_WHY="copying its files failed"
-    fi
-fi
-[ "$CARPLAY_OK" -eq 1 ] || echo "CarPlay map: not installed, $CARPLAY_WHY."
-
-# CarPlay's safe area: the part of the window the dials do not cover, where
-# the iPhone keeps the car and its instruction card. The same
-# GAL_SECONDARY_INSETS (top,bottom,left,right) Android Auto uses, which are
-# in its 800x480 frame after the margins of the band (also with full frame:
-# the hook converts them), scaled to the window. harman-f's hook reads it
-# when the iPhone connects. Without it the whole window counts as visible
-# (Golf R: card and car under the dials).
-CARPLAY_SAFEAREA=$APP_MOUNT/root/mibr-carplay111-safearea.conf
-if [ "$CARPLAY_OK" -eq 1 ]; then
-    INSETS=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9]*\),\([0-9]*\),\([0-9]*\),\([0-9]*\)[ 	]*$/\1 \2 \3 \4/p' \
-        "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
-    set -- ${INSETS:-40 40 127 127}
-    SAFE_Y=`expr $1 \* $MAP_H / \( 480 - $BAND_MARGIN_H \) || :`
-    SAFE_B=`expr $2 \* $MAP_H / \( 480 - $BAND_MARGIN_H \) || :`
-    SAFE_X=`expr $3 \* $MAP_W / \( 800 - $BAND_MARGIN_W \) || :`
-    SAFE_R=`expr $4 \* $MAP_W / \( 800 - $BAND_MARGIN_W \) || :`
-    SAFE_W=`expr $MAP_W - $SAFE_X - $SAFE_R || :`
-    SAFE_H=`expr $MAP_H - $SAFE_Y - $SAFE_B || :`
-    # echo, not printf: some units have no printf binary
-    if [ "$SAFE_W" -ge 160 ] && [ "$SAFE_H" -ge 120 ] &&
-       { echo "x=$SAFE_X"; echo "y=$SAFE_Y"; echo "w=$SAFE_W"; echo "h=$SAFE_H"; } > "$CARPLAY_SAFEAREA"; then
-        echo "CarPlay map: safe area ${SAFE_W}x${SAFE_H} at ${SAFE_X},${SAFE_Y} (from the insets)"
-    else
-        rm -f "$CARPLAY_SAFEAREA"
-        echo "CarPlay map: insets leave too little of the window; using all of it"
-    fi
-else
-    rm -f "$CARPLAY_SAFEAREA" 2>/dev/null || true
-fi
+done
+rm -f "$APP_MOUNT/root/mibr-carplay111-safearea.conf" 2>/dev/null || true
 
 mount -ur "$APP_MOUNT" 2>/dev/null || true
 APP_WRITABLE=0
@@ -726,57 +637,6 @@ grep -q "LD_PRELOAD=$PRELOAD_SO_ALIAS" "$TEMP" || {
     exit 1
 }
 
-# CarPlay: the same edit, on the "carplay" child (dio_manager). Built into the
-# same file because a repeated install starts again from the untouched
-# original, and the uninstall puts that original back: both phones' entries
-# always come and go together. CarPlay is asked for the cluster map
-# window's size, read above, so its stream fills the player's window.
-if [ "$CARPLAY_OK" -eq 1 ]; then
-    CP_INJECTION="\"LD_PRELOAD=$CARPLAY_PRELOAD\", \"ALTSCREEN111_WIDTH=$MAP_W\", \"ALTSCREEN111_HEIGHT=$MAP_H\", "
-    CP_EXISTING=`awk '
-    BEGIN { in_children=0; in_cp=0 }
-    {
-        if ($0 ~ /"children"[ 	]*:/) in_children=1
-        if (in_children && !in_cp && $0 ~ /^[ 	]*"carplay"[ 	]*:/) in_cp=1
-        if (in_cp && $0 ~ /^[ 	]*"envs"[ 	]*:\[/) {
-            line=$0; sub(/^[^\[]*\[/, "", line); sub(/\].*$/, "", line)
-            if (line ~ /LD_PRELOAD/) { print "preload"; exit }
-            n=split(line, parts, /"[ 	]*,[ 	]*"/)
-            if (line ~ /^[ 	]*$/) n=0
-            print n; exit
-        }
-    }' "$SOURCE"`
-    if [ "$CP_EXISTING" = preload ]; then
-        CARPLAY_OK=0; CARPLAY_WHY="CarPlay already has a preloaded library (another CarPlay mod?)"
-    elif [ -z "$CP_EXISTING" ]; then
-        CARPLAY_OK=0; CARPLAY_WHY="no carplay entry in the supervisor config"
-    elif [ `expr $CP_EXISTING + 3` -gt 10 ]; then
-        CARPLAY_OK=0; CARPLAY_WHY="its environment list would pass the limit of 10"
-    else
-        awk -v injection="$CP_INJECTION" '
-        BEGIN { in_children=0; in_cp=0; patched=0 }
-        {
-            if ($0 ~ /"children"[ 	]*:/) in_children=1
-            if (in_children && !in_cp && $0 ~ /^[ 	]*"carplay"[ 	]*:/) in_cp=1
-            if (in_cp && !patched && $0 ~ /^[ 	]*"envs"[ 	]*:\[/) {
-                sub(/\[/, "[" injection)
-                patched=1
-            }
-            print
-        }
-        END { if (!patched) exit 3 }
-        ' "$TEMP" > "$TEMP.cp" && grep -q "LD_PRELOAD=$CARPLAY_PRELOAD" "$TEMP.cp" && \
-            grep -q "LD_PRELOAD=$PRELOAD_SO_ALIAS" "$TEMP.cp" && mv "$TEMP.cp" "$TEMP" || {
-            rm -f "$TEMP.cp"
-            CARPLAY_OK=0; CARPLAY_WHY="the carplay entry could not be edited"
-        }
-    fi
-    if [ "$CARPLAY_OK" -eq 1 ]; then
-        echo "CarPlay map: added to dio_manager's start-up ($CP_EXISTING + 3 environment entries)."
-    else
-        echo "CarPlay map: not installed, $CARPLAY_WHY. The Android Auto map is unaffected."
-    fi
-fi
 LD_LIBRARY_PATH="$VALIDATOR_LD_LIBRARY_PATH" "$JSONLINT" --file "$TEMP" || {
     rm -f "$TEMP"
     echo "Generated supervisor config failed jsonlint validation" >&2
@@ -844,7 +704,8 @@ LD_LIBRARY_PATH="$VALIDATOR_LD_LIBRARY_PATH" "$JSONLINT" --file "$TARGET_CONFIG"
     exit 1
 }
 rm -f "$TEMP"
-if [ "$CARPLAY_OK" -eq 1 ]; then carplay_pf_open; else carplay_pf_close; fi
+# The firewall rule an older package's CarPlay map added.
+carplay_pf_close
 sync
 mount -ur "$SYSTEM_MOUNT" 2>/dev/null || true
 SYSTEM_WRITABLE=0
@@ -858,7 +719,6 @@ echo "    on the internal /mnt/app partition, not the SD card -- avoids the"
 echo "    SD-card mount-timing race at GAL's boot-time launch."
 echo "  output mode: $OUTPUT (video forwarded to stream-player)"
 echo "  cluster: Android Auto 800x480 @ 30 fps (margins ${MARGIN_W}x${MARGIN_H}), DPI $DPI, ${MAP_W}x${MAP_H} window"
-if [ "$CARPLAY_OK" -eq 1 ]; then echo "  CarPlay map: installed, ${MAP_W}x${MAP_H}"; else echo "  CarPlay map: no ($CARPLAY_WHY)"; fi
 echo "  debug logs: $DEBUG"
 echo "  second sink: $SECOND_SINK   inject metadata: $INJECT_META"
 # The hook reads GAL_DUALSCREEN_AAP_MINOR from its own copy of the settings at

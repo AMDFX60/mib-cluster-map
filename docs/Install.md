@@ -103,6 +103,8 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | Turn card as installed (hidden), then reboot | Back to the settings' own insets from either test. This fork's settings hide the card (`134,104,0,0`): Maps leaves its card out when the space is too short for it. An install from the card also does that |
 | Test: map smaller / larger (DPI -10 / +10), then reboot | Changes `GAL_SECONDARY_DPI` in the unit's copy in steps of 10, between 80 and 170: smaller draws the map, its text and the turn card smaller. The turn card positions above are measured at DPI 110. The status check shows the value |
 | Map size as installed, then reboot | Back to the DPI the install wrote. An install from the card also does that |
+| Test: cockpit map 30 fps mode, then reboot | The unit sends the cockpit its map picture 30 times a second instead of 20: the green menu swaps the unit's `NavActiveIgnore.jar` for a copy that differs only in that number (`ChangeDataRateSequence`, stock firmware 10, the patch 20). Only when that jar is this package's. Not yet car-tested: if the cockpit map or the car's own map stutters, freezes or stays black, switch back. The status check shows the rate |
+| Cockpit map 20 fps mode (standard), then reboot | Back to the package's `NavActiveIgnore.jar`. An install keeps either; Uninstall puts the 20 fps jar back |
 | Switch to turn-by-turn arrows instead (no map) | Removes the map, installs the arrows. Install switches back |
 | Save logs to SD | For a problem report. Before rebooting: logs are in RAM |
 | Collect files for porting (quick) | About 2.5 MB, read only |
@@ -137,17 +139,23 @@ while the phone sends it.
 
 | Where | What |
 |---|---|
-| `/mnt/system/etc/eso/production/smartphone_integrator.json` | adds the hook to the Android Auto program's start-up, and the CarPlay hook to CarPlay's where the unit's CarPlay library fits; original kept as `.gal-dualscreen.original` and in `ClusterMap/backups/` on the card |
-| `/mnt/app/eso/lib/gal_dualscreen/` | the hooks, a helper library, the CarPlay supervisor script, a copy of the settings |
+| `/mnt/system/etc/eso/production/smartphone_integrator.json` | adds the hook to the Android Auto program's start-up; original kept as `.gal-dualscreen.original` and in `ClusterMap/backups/` on the card |
+| `/mnt/app/eso/lib/gal_dualscreen/` | the hook, a helper library, a copy of the settings |
 | `/mnt/app/navigation/stream-player` | the video player |
 | `/mnt/app/eso/hmi/lsd/lsd.sh` | Java patch lines: NavActiveIgnore added if missing (on the trains above, or anywhere with `CLUSTERMAP_ADD_NAVIGNORE=1`), the turn-arrows jar's line removed (map) or added (arrows). Previous file kept as `lsd.sh.before_<jar>` |
+| `/mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar` | the patch itself, when the installer adds it. The green menu's frame-rate switch replaces it with the 30 fps copy and back; an install keeps that choice, an uninstall puts the 20 fps jar back |
 | `/mnt/app/eso/hmi/engdefs/cluster-map.esd` | the menu screen |
-| `/mnt/system/etc/pf*.conf` | CarPlay map only: one firewall rule letting the iPhone's cluster video (TCP 6031) in on its USB CarPlay link, marked `# clustermap carplay map`; originals kept as `.clustermap.original` |
-| `/mnt/app/root/mibr-carplay111-safearea.conf` | CarPlay map only: the part of the window clear of the dials, from `GAL_SECONDARY_INSETS` |
 
 Uninstall puts all of it back, except that the engineering menu stays
 switched on, which is harmless. Run the status check afterwards: it should say
 the hook is not installed.
+
+This fork has no CarPlay map. Packages before 1.1.3 installed one where the
+unit's CarPlay library fitted: an entry in CarPlay's start-up, its files in
+`/mnt/app/eso/lib/gal_dualscreen/`, `/mnt/app/root/mibr-carplay111-safearea.conf`
+and a firewall rule marked `# clustermap carplay map` in
+`/mnt/system/etc/pf*.conf`. Installing 1.1.3 or later takes all of that out
+again, and so does Uninstall. CarPlay itself works as stock.
 
 ## Cluster map window
 
@@ -157,8 +165,7 @@ another size arrives as coloured stripes. The installer reads the size from
 the display manager (`dmdt gd`, window 33) and opens the player's window at
 it. Android Auto's cluster video is always 800×480, so where the window has
 another shape the phone is asked to leave margins (0×182 for 1010×376) and
-the player scales the rest to fill the window. CarPlay is asked for the
-window's size. If the size cannot be read, the card's `GAL_PLAYER_WINDOW`
+the player scales the rest to fill the window. If the size cannot be read, the card's `GAL_PLAYER_WINDOW`
 is used when set (for example `GAL_PLAYER_WINDOW=1010x376`), otherwise
 800×480. The install
 output and the unit's copy of the settings (`GAL_PLAYER_WINDOW`,
@@ -194,8 +201,8 @@ the unit's copy is refreshed, and reboot. The file documents every key.
 | `GAL_PLAYER_WINDOW` | 1010x376 (this fork: Skoda) | used only when the installer says the cluster map window was "not reported by the display manager"; otherwise the reported size wins. Set it to your cluster's window if that is not 1010x376, or comment it out for 800×480 |
 | `CLUSTERMAP_KEEP_ARROWS` | 0 | 1 keeps the turn-arrows jar with the map (adds it if missing): map, arrows and music together on SEAT. On VW the map has gone blank when a route starts; one Tiguan `K4525` report says otherwise on beta8 (#44) |
 | `CLUSTERMAP_ADD_NAVIGNORE` | 0 | the map goes as soon as a route starts, on firmware where the installer does not add `NavActiveIgnore` by itself. 1 adds it, with a backup, and uninstall removes it. It edits the script that starts the centre screen, so check SSH works first |
-| `CLUSTERMAP_CARPLAY_TRIAL` | unset | the installer refuses the CarPlay map because this unit's `libairplay.so` is a different build. Put the size it prints here to allow the attempt; the hook still checks every symbol it patches and leaves CarPlay stock if they do not fit. See [CarPlay](CarPlay.md) |
 | `GAL_PLAYER_DECODER` | sw | `sw` is the tested software decoder. `hw` uses the unit's own video decoder and frees most of a processor core. If it will not open, the player uses software; if it fails while decoding, it stays off until the next reboot. **Not yet car-tested** |
+| `GAL_PLAYER_PRIORITY` | 12 (this fork) | the player's priority, raised to this and never lowered (QNX's default is 10), so the compositor stalls the cockpit map less. 0 or no line leaves it as spawned; at most 20. The player log says `priority: 10 -> 12` |
 | `GAL_PLAYER_NVSS_OUTPUT` | 1 | the cluster stays black with `hw`: try 0 (uncomment the line first) |
 | `GAL_DUALSCREEN_DEBUG`, `GAL_FIX_STREAM_TIMING`, `GAL_PLAYER_STATS`, `GAL_HOOK_LOG_MAX_MB` | 0, 0, 0, 1 | full trace for a bug report: 0, 1, 1, 10, then install over SSH with `enable_hook.sh --debug` |
 
@@ -287,8 +294,7 @@ owner willing to test.
 
    It copies the two phone libraries under whatever names the unit carries
    them: the Android Auto receiver (`libautoreceiver.so`, or
-   `libautoreceiver_qnx.so.1` on the VWG11 generation) and the CarPlay
-   library (`libairplay.so`). If neither known name is there it searches the
+   `libautoreceiver_qnx.so.1` on the VWG11 generation). If no known name is there it searches the
    unit and copies what it finds, because a differently named library is the
    usual reason a unit looks unportable when it is not (#28). `info.txt`
    records which names were found.

@@ -78,6 +78,7 @@ static int   g_idleMaxBytes         = 0;      // Stationary frame threshold (def
 static int   g_idleHeartbeatHz      = 0;      // Stationary heartbeat keepalive rate in Hz (default: 0 = disabled)
 static bool  g_loopFile             = false;
 static bool  g_verbose              = true;
+static int   g_priority             = 0;      // GAL_PLAYER_PRIORITY, 0 = as spawned
 #ifndef __QNX__
 static char  g_dumpVideoPath[512]   = {0};
 static int   g_dumpMaxFrames        = 0;
@@ -1176,6 +1177,9 @@ static void load_player_config() {
             } else if (strcmp(key, "GAL_PLAYER_STATS") == 0) {
                 /* 0 drops the once-a-second STATS line; everything else is still logged. */
                 g_verbose = atoi(val) != 0;
+            } else if (strcmp(key, "GAL_PLAYER_PRIORITY") == 0) {
+                int p = atoi(val);
+                if (p >= 0 && p <= 20) g_priority = p;
             }
         }
         fclose(f);
@@ -1196,6 +1200,36 @@ static void load_player_config() {
     if (env_hb) {
         g_idleHeartbeatHz = atoi(env_hb);
     }
+}
+
+/*
+ * GAL_PLAYER_PRIORITY: raise the player to this priority, never lower it.
+ * Set on the main thread before any other starts, so the decoder, FFmpeg's
+ * and the display-switch threads inherit it. The player is spawned from gal
+ * and otherwise runs at whatever priority that thread had (QNX's default is
+ * 10). kamgurgul's MHI2Q renderer stalled for 300-650 ms at a time behind the
+ * compositor at 10 and runs at 15; a little above 10 is the cautious step,
+ * since a software decoder far above gal and the interface could starve them.
+ */
+static void apply_player_priority() {
+#ifdef __QNX__
+    if (g_priority <= 0) return;
+    struct sched_param param;
+    int policy = 0;
+    if (pthread_getschedparam(pthread_self(), &policy, &param) != 0) {
+        LOGE("priority: cannot read the current priority");
+        return;
+    }
+    int was = param.sched_priority;
+    if (was >= g_priority) {
+        LOG("priority: %d, already at or above GAL_PLAYER_PRIORITY=%d", was, g_priority);
+        return;
+    }
+    param.sched_priority = g_priority;
+    int rc = pthread_setschedparam(pthread_self(), policy, &param);
+    if (rc != 0) LOGE("priority: %d -> %d failed (%d)", was, g_priority, rc);
+    else LOG("priority: %d -> %d (GAL_PLAYER_PRIORITY)", was, g_priority);
+#endif
 }
 
 // ---------------- Application Entry Point ----------------
@@ -1256,6 +1290,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
     load_player_config();
+    apply_player_priority();
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "--no-ack") == 0) {
