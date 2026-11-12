@@ -70,8 +70,8 @@ for the Skoda cockpit.
   three times faster. Not yet measured in the car.
 - **Turn card setting:** hidden (standard), top right or top left, from the
   green menu or `CLUSTERMAP_TURN_CARD`; the next install keeps it.
-- **Simpler green menu:** the sharper-map switch, the 30 fps cockpit test and
-  the turn card tests are gone. An 800×480 entry stays for comparison.
+- **Simpler green menu:** the sharper-map switch, the picture switch, the
+  30 fps cockpit test and the turn card tests are gone.
 - The player logs once a minute how many pictures it shows and how long each
   step takes.
 
@@ -139,8 +139,6 @@ unit's own copy of the settings and takes effect after a reboot.
 |---|---|
 | Status and compatibility check | What is installed and working |
 | Install / Uninstall | The same as the software update |
-| 720p picture 1:1 (standard) | The sharp picture |
-| Test: 800x480 picture (to compare) | The older 800×480 picture, stretched to the window |
 | Turn card hidden (standard) | No green card; the arrival time at the bottom |
 | Turn card top right | The card in the top right corner with the arrival time under it; the car lower down |
 | Turn card top left | The same space moved right, so the card has room on the left (Maps decides the side) |
@@ -186,7 +184,7 @@ needs editing. The ones this fork adds:
 
 | Setting | Standard | |
 |---|---|---|
-| `CLUSTERMAP_720P` | 1 | 0 goes back to the 800×480 picture |
+| `CLUSTERMAP_720P` | 1 | 0 goes back to the 800×480 picture, only if the cockpit ever shows no map with 720p |
 | `CLUSTERMAP_TURN_CARD` | hidden | `top_right` or `top_left` |
 | `GAL_SECONDARY_DPI` | 110 | lower draws the map, its text and the card smaller |
 | `GAL_PLAYER_COLOR` | auto | `old` for the colours before 1.3 |

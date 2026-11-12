@@ -97,8 +97,6 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | 1. Status and compatibility check | Firmware train, verdict, what is installed, Java patches |
 | 2. Install cluster map | The same installer as route 1 |
 | Uninstall and restore original state | Full revert |
-| Test: 800x480 picture (to compare), then reboot | Sets `CLUSTERMAP_720P=0` in the unit's copy: upstream's 800×480 frame with margins, stretched to the window, to compare sharpness and smoothness with 720p. An install from the card writes the card's setting again |
-| 720p picture 1:1 (standard), then reboot | Sets `CLUSTERMAP_720P=1` in the unit's copy: the phone is asked for a 1280×720 frame with margins that leave exactly the cockpit window, and the player shows it 1:1; see [Cluster map window](#cluster-map-window). This fork installs it on |
 | Turn card hidden (standard), then reboot | Only for a 1010×376 window: no green card. The 160×60 space at 25-45 % of the height (`75,163,320,320`) is too short for it, so Maps leaves it out, draws the car just below the middle and the arrival time in a line at the bottom. Car-tested |
 | Turn card top right, then reboot | The same space 25 lines lower (`100,138,320,320`): Maps shows the card in the top right corner with the arrival time under it, and the car lower down. Car-tested |
 | Turn card top left, then reboot | As top right but the space moved right (`100,138,480,160`), so the free room is on the left. Maps decides which side its card goes; if it stays right, the car is just further right. Not yet car-tested |
@@ -229,7 +227,7 @@ with its `health:` line, from beta4) showed why: decoding took about 100 ms
 a picture in software without NEON, one core full; copying, uploading and
 showing took about 13 ms. From beta5 FFmpeg is built with the Tegra 3's NEON
 routines (`cpu: NEON present` in the player log). If the cockpit ever shows
-no map, choose **Test: 800x480 picture**.
+no map, set `CLUSTERMAP_720P=0` on the card and install again.
 
 Upstream has the same switch (off by default) but scales the insets
 differently: it first takes the band's margins (91 lines top and bottom on

@@ -34,14 +34,6 @@ script
     label   "Uninstall and restore original state"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/frame_800.sh"
-    label   "Test: 800x480 picture (to compare), then reboot"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/frame_720p.sh"
-    label   "720p picture 1:1 (standard), then reboot"
-
-script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_hidden.sh"
     label   "Turn card hidden (standard), then reboot"
 

@@ -1,6 +1,5 @@
-# Shared by enable_hook.sh and the green menu's sharper-map switch
-# (full_frame.sh): how Android Auto's frame is fitted to the cluster map
-# window, and the lines of the unit's settings copy that say so.
+# Shared by enable_hook.sh and window_fix.sh: how Android Auto's frame is
+# fitted to the cluster map window, and the lines of the unit's settings copy that say so.
 # From AMDFX60's fork (GPL-3.0), reported car-tested on a Skoda Superb.
 #
 # Android Auto's frame is always 800x480. Where the window has another

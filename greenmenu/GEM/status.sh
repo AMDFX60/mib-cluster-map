@@ -18,7 +18,7 @@ if [ -r "$UNIT_CONF" ]; then
     elif [ "`sed -n 's/^CLUSTERMAP_FULL_FRAME=\([01]\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`" = 1 ]; then
         echo "  window ${w:-unknown}, picture: 800x480 whole frame (upstream's sharper map)"
     else
-        echo "  window ${w:-unknown}, picture: 800x480 (test, margins ${m:-unknown})"
+        echo "  window ${w:-unknown}, picture: 800x480 (margins ${m:-unknown})"
     fi
     i=`sed -n 's/^GAL_SECONDARY_INSETS=\([0-9,]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
     d=`sed -n 's/^GAL_SECONDARY_DPI=\([0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | head -1`
