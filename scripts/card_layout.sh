@@ -4,37 +4,37 @@
 # card at the top of the space the insets leave, centred, and the car in that
 # space too, so each position is a set of insets: the card goes with the
 # space, and the car with it. This fork's settings hide the card (a space too
-# short for it); the top and bottom tests show it again, the lower test
-# moves the hidden space down. Measured on a Skoda 1010x376
+# short for it); the top and bottom tests show it again, the higher test
+# moves the hidden space up. Measured on a Skoda 1010x376
 # cockpit at DPI 110, so only offered for that window. Changes only
 # GAL_SECONDARY_INSETS in the unit's own copy of the settings, keeping the
 # installed value to go back to; takes effect at the next reboot. An install
 # from the card writes the card's insets again.
 #
-#   card_layout.sh top|bottom|lower|standard
+#   card_layout.sh top|bottom|higher|standard
 # Exit 0: switched, reboot. 3: nothing to change. Anything else: failed.
 HERE=`dirname "$0"`
 . "$HERE/lib_app_mount.sh"
 CONF="$PRELOAD_WRITE_DIR/gal_dualscreen.conf"
 MARK="# Turn card position (switched by the green menu)"
 
-# top,bottom,left,right in the margin band (800x298). With full frame the hook
-# scales these by the pixel aspect, and with theme 0 each still fits the 15
-# bytes UiConfig has.
+# top,bottom,left,right in the margin band (800x298). At 720p the hook scales
+# these to the window (x1.2625), with full frame by the pixel aspect, and with
+# theme 0 each still fits the 15 bytes UiConfig has.
 # top: the card at the top, centred, clear of the cockpit's top line and its
 #   two lower segments (the settings before 1.1.2).
 # bottom: a 400x105 band, centred, 10 above the lower edge, between the two
 #   lower segments.
-# lower: the card still hidden (a full-width space 60 high), but from 35 to
-#   55 percent of the height instead of the installed 25 to 45, for more
-#   road ahead. Maps draws the car a little below the space: at 45 to 65
-#   percent (1.1.2) it went behind the cockpit's lower bar.
+# higher: the card still hidden, the 160x60 space at 25 to 45 percent of the
+#   height as in 1.2.2-beta3 (the installed one is 25 lines lower, so the
+#   car sits nearer the arrival line). A full-width space (beta4's lower
+#   test) let Maps show the card at the side.
 case "$1" in
     top)      NEW=40,127,127,127; WHAT="at the top" ;;
     bottom)   NEW=183,10,200,200; WHAT="at the bottom" ;;
-    lower)    NEW=105,133,0,0; WHAT="hidden, with the car lower" ;;
+    higher)   NEW=75,163,320,320; WHAT="hidden, with the car higher" ;;
     standard) NEW=; WHAT="as installed" ;;
-    *) echo "usage: $0 top|bottom|lower|standard" >&2; exit 2 ;;
+    *) echo "usage: $0 top|bottom|higher|standard" >&2; exit 2 ;;
 esac
 
 # uiconfig_fits INSETS THEME PIXEL_ASPECT_E4
@@ -126,6 +126,8 @@ else
     THEME=`sed -n 's/^GAL_SECONDARY_UI_THEME=\([0-9]\)[ 	]*$/\1/p' "$CONF" | head -1`
     PAR=`sed -n 's/^GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4=\([0-9][0-9]*\)[ 	]*$/\1/p' "$CONF" | head -1`
     if [ -z "$PAR" ] || [ "$PAR" -eq 0 ] || [ "$PAR" -gt 80000 ]; then PAR=10000; fi
+    # At 720p the hook scales by window / band instead (1.2625 on 1010x376).
+    if [ "`sed -n 's/^CLUSTERMAP_720P=\([01]\)[ 	]*$/\1/p' "$CONF" | tail -1`" = 1 ]; then PAR=12625; fi
     if ! uiconfig_fits "$NEW" "${THEME:-0}" "$PAR"; then
         echo "Note: with GAL_SECONDARY_UI_THEME=${THEME:-0} these insets do not fit the"
         echo "setting; the hook will cut the smallest above 127 to 127. Theme 0 fits them."

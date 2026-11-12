@@ -2,12 +2,12 @@
 # The green menu's picture switch: how Android Auto's frame fills the cluster
 # map window, in the unit's own copy of the settings, so it can be tried in
 # the car without editing the card and installing again.
-#   on    sharper map: the whole 800x480 frame with wide pixels
-#         (CLUSTERMAP_FULL_FRAME=1, this fork's standard)
-#   off   the 800x480 frame with margins, as upstream
 #   720p  a 1280x720 frame whose margins leave exactly the window, shown 1:1
-#         (CLUSTERMAP_720P=1, a test)
-# on and off also end the 720p test. Changes only the window lines of that
+#         (CLUSTERMAP_720P=1, this fork's standard)
+#   off   the 800x480 frame with margins, as upstream (the menu's comparison)
+#   on    upstream's sharper map: the whole 800x480 frame with wide pixels
+#         (no longer in this fork's menu)
+# on and off end 720p. Changes only the window lines of that
 # copy (lib_cluster_frame.sh); takes effect at the next reboot: gal reads the
 # settings once at its start and hands the same frame values to every player
 # it starts until then. An install from the card writes the card's setting
@@ -78,8 +78,10 @@ NOW_HD=`sed -n 's/^CLUSTERMAP_720P=\([01]\)[ 	]*$/\1/p' "$CONF" | tail -1`
 if [ "$NOW_HD" = "$WANT_HD" ] && [ "$NOW" = "$WANT" ]; then
     if [ "$WANT_HD" = 1 ]; then
         echo "The 720p picture is already on. Nothing changed."
+    elif [ "$1" = off ]; then
+        echo "The 800x480 picture is already on. Nothing changed."
     else
-        echo "Sharper map is already $1. Nothing changed."
+        echo "Upstream's sharper map is already on. Nothing changed."
     fi
     exit 3
 fi
@@ -93,11 +95,11 @@ if ! frame_write_conf "$CONF" $MAP_W $MAP_H $WANT $WANT_HD; then
 fi
 sync
 if [ "$WANT_HD" = 1 ]; then
-    echo "720p picture: ON (test)."
+    echo "720p picture: ON (this fork's standard)."
     echo "Android Auto is asked for a 1280x720 frame with ${MARGIN_W}x${MARGIN_H} margins,"
     echo "so the phone draws the ${MAP_W}x${MAP_H} window's own pixels and the player"
     echo "shows them 1:1, without scaling. The hook scales DPI and insets to match."
-    echo "If the cockpit shows no map after the reboot, choose Sharper map ON."
+    echo "If the cockpit shows no map after the reboot, choose the 800x480 picture."
 elif [ "$WANT" = 1 ]; then
     echo "Sharper map: ON."
     echo "Android Auto now draws on the whole 800x480 frame, pixel aspect"
@@ -105,8 +107,8 @@ elif [ "$WANT" = 1 ]; then
     echo "scales DPI and insets by the same ratio, so the map should keep its"
     echo "scale and the turn card its place. Compare with OFF after a reboot."
 else
-    echo "Sharper map: OFF."
-    echo "Back to ${MARGIN_W}x${MARGIN_H} margins."
+    echo "800x480 picture (to compare with 720p): ${MARGIN_W}x${MARGIN_H} margins,"
+    echo "scaled to the ${MAP_W}x${MAP_H} window. The 720p entry goes back."
 fi
 echo "Hold the power button for 10 seconds to reboot the unit."
 exit 0

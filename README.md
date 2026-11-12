@@ -36,20 +36,19 @@ navigation map.
 
 Based on upstream **v1.2.1** (merged in 1.2.2), with its installer, fixes and
 Android Auto features. Upstream took the sharper map, the fix for insets above
-127 and the player priority from this fork; what still differs:
+127 and the player priority from this fork; the fork has since moved on to a
+720p picture. What differs:
 
 | | Upstream | This fork |
 |---|---|---|
-| Sharper map (`CLUSTERMAP_FULL_FRAME`) | Off by default | **On**: the phone draws the whole frame at the cockpit's real shape, so more of the picture's pixels reach the cockpit |
-| 720p picture (`CLUSTERMAP_720P`) | None: the cluster is always 800×480 | **Test** (green menu): the phone sends 1280×720 with margins that leave exactly the 1010×376 window, shown 1:1 without any scaling. Not car-tested yet; if it works it replaces the sharper map |
-| Colours | Every stream taken as full range (0-255) | **As the stream says**, normally limited range (16-235): deeper blacks, more contrast. `GAL_PLAYER_COLOR=old` for the previous look |
-| Sharper map: insets | The band's margins (91 lines) are taken off the top and bottom insets before they are scaled | **Scaled as they are**, the rule every inset in this fork was tuned with on the car. Upstream's rule would bring the hidden turn card back |
-| Map size (`GAL_SECONDARY_DPI`) | `auto`: 125 on a Skoda | **110**: smaller text and a compact turn card |
-| Turn card (`GAL_SECONDARY_INSETS`) | `auto`: 40,127,127,127 on a Skoda, the card at the top | **75,163,320,320: hidden**. Google Maps leaves its card out when the space it gets is too short for it, so the map shows without the green card, the car just below the middle. The green menu shows the card again, or moves the car lower, for a test |
+| Picture (`CLUSTERMAP_720P`) | 800×480 for the cluster, stretched to the 1010×376 window (or upstream's sharper map, squeezed and stretched) | **720p, 1:1**: the phone sends 1280×720 with margins that leave exactly the 1010×376 window, shown without any scaling. Car-tested (1.2.2-beta3): sharper than the sharper map, which this fork no longer offers |
+| Colours | Every stream taken as full range (0-255) | **As the stream says**: limited range BT.709 from the phone, so deeper blacks and more contrast. `GAL_PLAYER_COLOR=old` for the previous look |
+| Map size (`GAL_SECONDARY_DPI`) | `auto`: 125 on a Skoda | **110** (139 after the 720p scaling): smaller text and a compact turn card |
+| Turn card (`GAL_SECONDARY_INSETS`) | `auto`: 40,127,127,127 on a Skoda, the card at the top | **100,138,320,320: hidden**. Google Maps leaves its card out when the space it gets is too short for it, so the map shows without the green card, with the arrival time in a line at the bottom and the car just above it. The green menu shows the card again, or moves the car higher, for a test |
 | Cockpit window (`GAL_PLAYER_WINDOW`) | Guessed from the make when the display manager does not list it | Also preset to **1010×376** |
 | Player priority (`GAL_PLAYER_PRIORITY`) | Unset (10) | **12**: a little higher, so the system's compositor holds up the cockpit map less |
 | CarPlay map | Installed where the unit's CarPlay library fits | **None**. This fork is Android Auto only; installing it removes a CarPlay map an older package added, and CarPlay itself stays stock |
-| Green menu | Status, logs, uninstall, sharper map, arrows switch | **Also** test positions for the turn card, the map size and the cockpit frame rate ([below](#green-menu-switches)) |
+| Green menu | Status, logs, uninstall, sharper map, arrows switch | **Also** the 800×480 picture to compare, test positions for the turn card, the map size and the cockpit frame rate ([below](#green-menu-switches)) |
 | Building | Linux, macOS | **Also Windows**: Git Bash and Docker Desktop |
 
 Releases are named `mib-cluster-map_v1.1.2-skoda.zip`, test versions
@@ -71,8 +70,8 @@ Releases are named `mib-cluster-map_v1.1.2-skoda.zip`, test versions
   player).
 - **Green menu:** works from either SD slot or a USB stick.
 - **New, off by default:** `GAL_PRIMARY_DPI` (Android Auto's size on the
-  centre screen), `GAL_CROP_TOP`/`GAL_CROP_BOTTOM` (manual crop instead of the
-  sharper map), and the translation of Android Auto 1.6+ navigation messages
+  centre screen), `GAL_CROP_TOP`/`GAL_CROP_BOTTOM` (manual crop of the 800×480
+  frame), and the translation of Android Auto 1.6+ navigation messages
   for `GAL_DUALSCREEN_AAP_MINOR` 6 or 7. `CLUSTERMAP_TURN_INFO` and
   `CLUSTERMAP_MUSIC_INFO` (turn arrow and music on the cockpit beside the map)
   are only installed on trains where the arrows jar is known to work, which
@@ -136,12 +135,12 @@ unit's copy of `NavActiveIgnore.jar`) and takes effect after a reboot. The turn 
 
 | Entry | What it does | On the Superb |
 |---|---|---|
-| Sharper map ON / OFF (margins) | The whole frame, or upstream's 800×298 band. Either also ends the 720p test | ON is a little sharper with a better placed card (beta9); ON is the default |
-| Test: 720p picture 1:1 | The phone draws the cockpit window's own pixels in a 1280×720 frame, shown without scaling | Not tested yet. If the cockpit shows no map, choose Sharper map ON |
+| 720p picture 1:1 (standard) | The phone draws the cockpit window's own pixels in a 1280×720 frame, shown without scaling | Car-tested (1.2.2-beta3): sharper. About 8 to 10 pictures a second there; beta4 copies only the visible part and logs where the time goes |
+| Test: 800x480 picture (to compare) | Upstream's 800×480 frame with margins, stretched to the window. The 720p entry goes back | For comparing sharpness and smoothness |
 | Test: show the turn card at the top | The card at the top, centred, the car below it (the settings before 1.1.2) | Car-tested up to beta12 |
 | Test: show the turn card at the bottom | The card in a band at the bottom, between the two lower segments | Not tested yet |
-| Test: hidden turn card, car lower | Still no card, the car lower for more road ahead: the space from 35 to 55 % of the height (`105,133,0,0`) | Not tested yet. At 45 to 65 % (the standard of 1.1.2 to 1.2.2-beta1) the car went behind the lower bar |
-| Turn card as installed (hidden) | Back to the installed settings: no card, the car just below the middle | Car-tested (beta12): no card, the car visible, the route ahead visible |
+| Test: hidden turn card, car higher | Still no card, the space 25 lines higher (`75,163,320,320`, the standard of 1.2.2-beta2 and beta3), so the car is further from the arrival line | Car-tested (beta12, 1.2.2-beta3): no card, the car visible, the arrival time in a line at the bottom |
+| Turn card as installed (hidden) | Back to the installed settings: no card, the car nearer the arrival line at the bottom (`100,138,320,320`) | Not tested yet. A full-width space (beta4's "car lower" test) let Maps put the card at the side, so the space stays 160 wide |
 | Test: map smaller / larger (DPI -10 / +10), Map size as installed | The map and its text smaller or larger, between DPI 80 and 170 | Not tested yet |
 | Test: cockpit map 30 fps mode / Cockpit map 20 fps mode (standard) | The unit sends the cockpit its map picture 30 instead of 20 times a second (stock firmware: 10), through a copy of `NavActiveIgnore.jar` that differs only in that number. The idea comes from [omonob/MHI2-Carplay-Maps](https://github.com/omonob/MHI2-Carplay-Maps) | Not tested yet |
 
@@ -156,10 +155,10 @@ with it.
 | Install by software update, green menu | Car-tested, beta8 to beta12 |
 | Android Auto map, with and without a route | Car-tested |
 | Automatic day/night | Car-tested (beta8), also by another owner ([upstream #41](https://github.com/MacsInSpace/mib-cluster-map/issues/41)) |
-| Sharper map | Car-tested (beta9) |
-| 720p picture 1:1, colour range fix (from 1.2.2-beta3) | Not tested yet |
+| Sharper map (1.1.1-beta9 to 1.2.2-beta3) | Car-tested (beta9); replaced by the 720p picture |
+| 720p picture 1:1, colour range fix (from 1.2.2-beta3) | Car-tested (beta3): sharper, colours as the stream says (limited range BT.709). About 8 to 10 pictures a second: being looked into (beta4 logs the player's timing) |
 | Android Auto version 1.5 (`GAL_DUALSCREEN_AAP_MINOR=5`, from beta11) | Car-tested (beta12): map and insets as before. Earlier tests ran at 7: go back to 7 if something stops working |
-| Turn card hidden | Car-tested (beta12). The car lower of 1.1.2 to 1.2.2-beta1 (`134,104,0,0`) is car-tested too: the card stays hidden, but the car goes behind the cockpit's lower bar, out of sight, so 1.2.2-beta2 is back at the beta12 values |
+| Turn card hidden | Car-tested (beta12). The car lower of 1.1.2 to 1.2.2-beta1 (`134,104,0,0`) is car-tested too: the card stays hidden, but the car goes behind the cockpit's lower bar, out of sight, so 1.2.2-beta2 went back to the beta12 values; beta4 moves the space 25 lines down for a car nearer the arrival line (not tested yet) |
 | Turn card at the bottom, map size | Not tested yet |
 | Turn-arrows jar beside the map (`CLUSTERMAP_KEEP_ARROWS=1`) | Not tested on a Skoda |
 | Cockpit map at 30 fps, player priority 12 (from 1.1.3) | Not tested yet |
@@ -193,7 +192,7 @@ covered.
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.2.2-beta3-skoda ./build_local.sh
+RELEASE_VERSION=v1.2.2-beta4-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit

@@ -1,7 +1,7 @@
 #!/bin/sh
 . "`dirname "$0"`/common.sh"
-# Sharper map (CLUSTERMAP_FULL_FRAME) off, in the unit's settings copy.
-echo "Sharper map OFF"
+# The 800x480 picture with margins (to compare with 720p), in the unit's settings copy.
+echo "Test: 800x480 picture (to compare)"
 sh "$PKG/scripts/full_frame.sh" off
 RC=$?
 echo

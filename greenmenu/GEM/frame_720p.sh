@@ -1,7 +1,7 @@
 #!/bin/sh
 . "`dirname "$0"`/common.sh"
-# The 720p picture (CLUSTERMAP_720P) on, in the unit's settings copy.
-echo "Test: 720p picture, 1:1"
+# The 720p picture (CLUSTERMAP_720P, the standard), in the unit's settings copy.
+echo "720p picture, 1:1 (standard)"
 sh "$PKG/scripts/full_frame.sh" 720p
 RC=$?
 echo

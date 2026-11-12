@@ -149,11 +149,22 @@ struct RGBABuffer {
     bool colorFull;   /* the stream says full range (0-255), not 16-235 */
     bool colorBt709;  /* the stream says BT.709, or is HD and says nothing */
 
-    RGBABuffer() : pixels(NULL), width(0), height(0), capacity(0), packetBytes(0), isKeyframe(false),
-                   colorFull(false), colorBt709(false) {}
+    /*
+     * The chroma planes' size, and where a luma texture coordinate lands in
+     * them (scale x/y, offset x/y). Half the luma size and the same place
+     * unless the frame was cut down to the window (720p, odd left margin).
+     */
+    int cWidth;
+    int cHeight;
+    float chroma[4];
 
-    void ensureCapacity(int w, int h) {
-        size_t total = (size_t)w * h + 2 * ((size_t)(w/2) * (h/2));
+    RGBABuffer() : pixels(NULL), width(0), height(0), capacity(0), packetBytes(0), isKeyframe(false),
+                   colorFull(false), colorBt709(false), cWidth(0), cHeight(0) {
+        chroma[0] = chroma[1] = 1.0f; chroma[2] = chroma[3] = 0.0f;
+    }
+
+    void ensureCapacity(int w, int h, int cw, int ch) {
+        size_t total = (size_t)w * h + 2 * ((size_t)cw * ch);
         if (capacity < total) {
             free(pixels);
             pixels = (uint8_t*)malloc(total);
@@ -161,6 +172,8 @@ struct RGBABuffer {
         }
         width = w;
         height = h;
+        cWidth = cw;
+        cHeight = ch;
     }
 
     void release() { free(pixels); pixels = NULL; capacity = 0; }
@@ -175,8 +188,8 @@ struct FramePool {
 
     FramePool() : writeSlot(0), readySlot(-1), readSlot(-1) {}
 
-    RGBABuffer* getWriteBuffer(int w, int h) {
-        slots[writeSlot].ensureCapacity(w, h);
+    RGBABuffer* getWriteBuffer(int w, int h, int cw, int ch) {
+        slots[writeSlot].ensureCapacity(w, h, cw, ch);
         return &slots[writeSlot];
     }
 
@@ -207,6 +220,16 @@ static volatile int g_streamSock = -1;
 static volatile bool g_newFrameReady = false;
 static uint64_t g_decodedFrameCount = 0;
 static uint64_t g_lastDecodeDurationUs = 0;
+/*
+ * Where the time per picture goes, for the once-a-minute health line:
+ * running totals in microseconds (32 bits wrap after 71 minutes of work,
+ * which the per-minute differences survive) and the minute's worst cases.
+ * Each is written by one thread and read by the render thread; a sample lost
+ * in a race only shifts a statistic.
+ */
+static volatile uint32_t g_tDecodeUs = 0, g_tCopyUs = 0, g_tUploadUs = 0, g_tDrawUs = 0;
+static volatile uint32_t g_tDecodeMaxUs = 0, g_tFrameMaxUs = 0;
+static volatile uint32_t g_drawnCount = 0;
 static char g_videoSource[512] = "tcp://127.0.0.1:12346";
 
 /*
@@ -369,6 +392,7 @@ static GLint  g_texLocU = -1;
 static GLint  g_texLocV = -1;
 static GLint  g_rangeLoc = -1;
 static GLint  g_matrixLoc = -1;
+static GLint  g_chromaLoc = -1;
 static GLuint g_texY = 0;
 static GLuint g_texU = 0;
 static GLuint g_texV = 0;
@@ -402,11 +426,13 @@ static const char* fragmentShaderSource =
     "uniform sampler2D texV;\n"
     "uniform vec3 range;\n"   /* Y offset, Y scale, Cb/Cr scale */
     "uniform vec4 matrix;\n"  /* Cr->R, Cb->G, Cr->G, Cb->B */
+    "uniform vec4 chroma;\n"  /* luma coordinate -> chroma: scale xy, offset zw */
     "void main()\n"
     "{\n"
+    "    vec2 c = v_texCoord * chroma.xy + chroma.zw;\n"
     "    float y = (texture2D(texY, v_texCoord).r - range.x) * range.y;\n"
-    "    float u = (texture2D(texU, v_texCoord).r - 0.5) * range.z;\n"
-    "    float v = (texture2D(texV, v_texCoord).r - 0.5) * range.z;\n"
+    "    float u = (texture2D(texU, c).r - 0.5) * range.z;\n"
+    "    float v = (texture2D(texV, c).r - 0.5) * range.z;\n"
     "    float r = y + matrix.x * v;\n"
     "    float g = y - matrix.y * u - matrix.z * v;\n"
     "    float b = y + matrix.w * u;\n"
@@ -822,6 +848,7 @@ void InitGL() {
     g_texLocV = glGetUniformLocation(g_programObject, "texV");
     g_rangeLoc = glGetUniformLocation(g_programObject, "range");
     g_matrixLoc = glGetUniformLocation(g_programObject, "matrix");
+    g_chromaLoc = glGetUniformLocation(g_programObject, "chroma");
     LOG("GL: attrib locations: pos=%d tex=%d", g_posAttr, g_texAttr);
 
     GLint linkStatus = 0;
@@ -1351,7 +1378,33 @@ static void* DecoderThreadFunc(void* arg) {
 
                         // Direct memcpy to contiguous YUV buffer
                         pthread_mutex_lock(&g_frameMutex);
-                        RGBABuffer* buf = g_framePool.getWriteBuffer(w, h);
+                        /*
+                         * 720p shown 1:1: only the window's part of the frame is
+                         * copied and uploaded (1010x376 of 1280x720 on the Skoda,
+                         * 2.4 times less than the whole frame), and drawn as a
+                         * frame of the window's size. The chroma planes start at
+                         * half the left margin, which on 135 columns is half a
+                         * chroma sample off: the shader puts that back.
+                         */
+                        uint64_t t_copy_start = now_us();
+                        int cropX = 0, cropY = 0, outW = w, outH = h;
+                        if (w == 1280 && h == 720 && g_pixelAspectE4 == 10000 &&
+                            (g_marginW > 0 || g_marginH > 0) &&
+                            g_marginW * 2 <= w && g_marginH * 2 <= h &&
+                            w - g_marginW == windowWidth && h - g_marginH == windowHeight) {
+                            cropX = g_marginW / 2;
+                            cropY = g_marginH / 2;
+                            outW = w - g_marginW;
+                            outH = h - g_marginH;
+                        }
+                        int cx0 = cropX / 2, cy0 = cropY / 2;
+                        int cW = (cropX + outW + 1) / 2 - cx0;
+                        int cH = (cropY + outH + 1) / 2 - cy0;
+                        RGBABuffer* buf = g_framePool.getWriteBuffer(outW, outH, cW, cH);
+                        buf->chroma[0] = (float)outW / (float)(2 * cW);
+                        buf->chroma[1] = (float)outH / (float)(2 * cH);
+                        buf->chroma[2] = (float)(cropX - 2 * cx0) / (float)(2 * cW);
+                        buf->chroma[3] = (float)(cropY - 2 * cy0) / (float)(2 * cH);
                         buf->packetBytes = packet->size;
                         buf->isKeyframe = isKey;
                         {
@@ -1376,32 +1429,36 @@ static void* DecoderThreadFunc(void* arg) {
                         }
                         
                         uint8_t* dstY = buf->pixels;
-                        uint8_t* dstU = dstY + (w * h);
-                        uint8_t* dstV = dstU + ((w / 2) * (h / 2));
+                        uint8_t* dstU = dstY + (outW * outH);
+                        uint8_t* dstV = dstU + (cW * cH);
 
                         // Copy Y plane
-                        for (int y = 0; y < h; ++y) {
-                            memcpy(dstY + y * w, frame->data[0] + y * frame->linesize[0], w);
+                        for (int y = 0; y < outH; ++y) {
+                            memcpy(dstY + y * outW,
+                                   frame->data[0] + (y + cropY) * frame->linesize[0] + cropX, outW);
                         }
                         if ((g_decodedFrameCount & 31u) == 0) {
                             uint64_t sum = 0, count = 0;
-                            for (int y = 8; y < h; y += 16)
-                                for (int x = 8; x < w; x += 16, ++count) sum += dstY[y * w + x];
+                            for (int y = 8; y < outH; y += 16)
+                                for (int x = 8; x < outW; x += 16, ++count) sum += dstY[y * outW + x];
                             g_lastLuma = count ? (unsigned)(sum / count) : 0u;
                         }
                         // Copy U plane
-                        for (int y = 0; y < h / 2; ++y) {
-                            memcpy(dstU + y * (w / 2), frame->data[1] + y * frame->linesize[1], w / 2);
+                        for (int y = 0; y < cH; ++y) {
+                            memcpy(dstU + y * cW, frame->data[1] + (y + cy0) * frame->linesize[1] + cx0, cW);
                         }
                         // Copy V plane
-                        for (int y = 0; y < h / 2; ++y) {
-                            memcpy(dstV + y * (w / 2), frame->data[2] + y * frame->linesize[2], w / 2);
+                        for (int y = 0; y < cH; ++y) {
+                            memcpy(dstV + y * cW, frame->data[2] + (y + cy0) * frame->linesize[2] + cx0, cW);
                         }
 
                         g_framePool.publishWrite();
                         g_newFrameReady = true;
                         g_decodedFrameCount++;
                         g_lastDecodeDurationUs = dec_dur;
+                        g_tDecodeUs += (uint32_t)dec_dur;
+                        if ((uint32_t)dec_dur > g_tDecodeMaxUs) g_tDecodeMaxUs = (uint32_t)dec_dur;
+                        g_tCopyUs += (uint32_t)(now_us() - t_copy_start);
 
                         pthread_cond_signal(&g_frameCond);
                         pthread_mutex_unlock(&g_frameMutex);
@@ -2007,9 +2064,11 @@ int main(int argc, char* argv[]) {
     ack_connect();
 
     // Pre-fill slot 0 with a blank black frame (Y=16, U=128, V=128)
-    RGBABuffer* initBuf = g_framePool.getWriteBuffer(windowWidth, windowHeight);
+    RGBABuffer* initBuf = g_framePool.getWriteBuffer(windowWidth, windowHeight,
+                                                     (windowWidth + 1) / 2, (windowHeight + 1) / 2);
     memset(initBuf->pixels, 16, (size_t)windowWidth * windowHeight);
-    memset(initBuf->pixels + (size_t)windowWidth * windowHeight, 128, ((size_t)windowWidth * windowHeight) / 2);
+    memset(initBuf->pixels + (size_t)windowWidth * windowHeight, 128,
+           2 * (size_t)initBuf->cWidth * initBuf->cHeight);
     g_framePool.publishWrite();
 
     pthread_attr_t decAttr;
@@ -2084,9 +2143,14 @@ int main(int argc, char* argv[]) {
             bool colorBt709 = g_colorAuto && dispBuf->colorBt709;
             if (firstFrame || w != prevFbW || h != prevFbH) fit_frame(w, h);
 
+            int cw = dispBuf->cWidth;
+            int ch = dispBuf->cHeight;
+            GLfloat chromaXform[4] = { dispBuf->chroma[0], dispBuf->chroma[1],
+                                       dispBuf->chroma[2], dispBuf->chroma[3] };
             uint8_t* pY = dispBuf->pixels;
             uint8_t* pU = pY + (w * h);
-            uint8_t* pV = pU + ((w / 2) * (h / 2));
+            uint8_t* pV = pU + (cw * ch);
+            uint64_t t_upload_start = now_us();
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g_texY);
@@ -2109,15 +2173,15 @@ int main(int argc, char* argv[]) {
             glActiveTexture(GL_TEXTURE1);
             glBindTexture(GL_TEXTURE_2D, g_texU);
             if (firstFrame || w != prevFbW || h != prevFbH) {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w/2, h/2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pU);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, cw, ch, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pU);
             } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w/2, h/2, GL_LUMINANCE, GL_UNSIGNED_BYTE, pU);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch, GL_LUMINANCE, GL_UNSIGNED_BYTE, pU);
             }
 
             glActiveTexture(GL_TEXTURE2);
             glBindTexture(GL_TEXTURE_2D, g_texV);
             if (firstFrame || w != prevFbW || h != prevFbH) {
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w/2, h/2, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pV);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, cw, ch, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pV);
                 
 
                 
@@ -2127,9 +2191,11 @@ int main(int argc, char* argv[]) {
                     LOG("render: first frame drawn t=%llu.%03llu", T_ARGS(now_us()));
                 firstFrame = false;
             } else {
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w/2, h/2, GL_LUMINANCE, GL_UNSIGNED_BYTE, pV);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cw, ch, GL_LUMINANCE, GL_UNSIGNED_BYTE, pV);
             }
-            
+            uint64_t t_draw_start = now_us();
+            g_tUploadUs += (uint32_t)(t_draw_start - t_upload_start);
+
             pthread_mutex_unlock(&g_frameMutex);
 
             // Render to screen (GPU YUV Shader)
@@ -2149,6 +2215,7 @@ int main(int argc, char* argv[]) {
                     glUniform4f(g_matrixLoc, 1.5748f, 0.18732f, 0.46812f, 1.8556f);
                 else
                     glUniform4f(g_matrixLoc, 1.402f, 0.34414f, 0.71414f, 1.772f);
+                glUniform4f(g_chromaLoc, chromaXform[0], chromaXform[1], chromaXform[2], chromaXform[3]);
 
                 glVertexAttribPointer(g_posAttr, 3, GL_FLOAT, GL_FALSE, 0, fittedVertices);
                 glVertexAttribPointer(g_texAttr, 2, GL_FLOAT, GL_FALSE, 0, croppedTexCoords);
@@ -2173,6 +2240,13 @@ int main(int argc, char* argv[]) {
                 }
             }
             write_ack();
+            {
+                uint64_t t_end = now_us();
+                g_tDrawUs += (uint32_t)(t_end - t_draw_start);
+                if ((uint32_t)(t_end - t_upload_start) > g_tFrameMaxUs)
+                    g_tFrameMaxUs = (uint32_t)(t_end - t_upload_start);
+                g_drawnCount++;
+            }
 #else
             if (!g_dumpVideoPipe) {
                 const char* dumpPath = getenv("GAL_PLAYER_DUMP_VIDEO");
@@ -2231,12 +2305,40 @@ int main(int argc, char* argv[]) {
 
             /* Once a minute, always: is the picture still coming, and is it black? (#4) */
             static uint64_t s_healthUs = 0, s_healthDec = 0;
+            /* Where the time went this minute (Skoda fork): the frame rate the
+             * phone sends follows how fast pictures are shown and ACKed. */
+            static uint32_t s_dec0 = 0, s_copy0 = 0, s_up0 = 0, s_draw0 = 0, s_drawn0 = 0;
+            static struct rusage s_healthUsage;
             if (s_healthUs == 0) {
                 s_healthUs = frameEndUs;
                 s_healthDec = curDec;
+                s_dec0 = g_tDecodeUs; s_copy0 = g_tCopyUs; s_up0 = g_tUploadUs;
+                s_draw0 = g_tDrawUs; s_drawn0 = g_drawnCount;
+                getrusage(RUSAGE_SELF, &s_healthUsage);
             } else if (frameEndUs - s_healthUs >= 60000000ULL) {
-                LOG("health: %llu pictures decoded in the last minute; brightness %u of 255 (under 16 is black) t=%llu.%03llu",
-                    (unsigned long long)(curDec - s_healthDec), g_lastLuma, T_ARGS(frameEndUs));
+                uint32_t decoded = (uint32_t)(curDec - s_healthDec);
+                uint32_t drawn = g_drawnCount - s_drawn0;
+                uint32_t dDec = g_tDecodeUs - s_dec0, dCopy = g_tCopyUs - s_copy0;
+                uint32_t dUp = g_tUploadUs - s_up0, dDraw = g_tDrawUs - s_draw0;
+                struct rusage ru;
+                getrusage(RUSAGE_SELF, &ru);
+                double cpuUs = (double)(ru.ru_utime.tv_sec - s_healthUsage.ru_utime.tv_sec) * 1e6 +
+                               (double)(ru.ru_utime.tv_usec - s_healthUsage.ru_utime.tv_usec) +
+                               (double)(ru.ru_stime.tv_sec - s_healthUsage.ru_stime.tv_sec) * 1e6 +
+                               (double)(ru.ru_stime.tv_usec - s_healthUsage.ru_stime.tv_usec);
+                double minuteUs = (double)(frameEndUs - s_healthUs);
+                LOG("health: %u pictures decoded (%.1f/s), %u drawn in the last minute; brightness %u of 255 (under 16 is black) t=%llu.%03llu",
+                    decoded, (double)decoded * 1e6 / minuteUs, drawn, g_lastLuma, T_ARGS(frameEndUs));
+                LOG("timing: per picture decode %.1f ms (max %.1f), copy %.1f ms, upload %.1f ms, draw+swap %.1f ms; slowest shown %.1f ms; player CPU %.0f%% of one core",
+                    decoded ? dDec / 1000.0 / decoded : 0.0, g_tDecodeMaxUs / 1000.0,
+                    decoded ? dCopy / 1000.0 / decoded : 0.0,
+                    drawn ? dUp / 1000.0 / drawn : 0.0, drawn ? dDraw / 1000.0 / drawn : 0.0,
+                    g_tFrameMaxUs / 1000.0, cpuUs * 100.0 / minuteUs);
+                g_tDecodeMaxUs = 0;
+                g_tFrameMaxUs = 0;
+                s_dec0 = g_tDecodeUs; s_copy0 = g_tCopyUs; s_up0 = g_tUploadUs;
+                s_draw0 = g_tDrawUs; s_drawn0 = g_drawnCount;
+                s_healthUsage = ru;
                 s_healthUs = frameEndUs;
                 s_healthDec = curDec;
             }

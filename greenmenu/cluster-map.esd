@@ -34,16 +34,12 @@ script
     label   "Uninstall and restore original state"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/full_frame_on.sh"
-    label   "Sharper map ON (whole frame, default), then reboot"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/full_frame_off.sh"
-    label   "Sharper map OFF (margins), then reboot"
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/frame_800.sh"
+    label   "Test: 800x480 picture (to compare), then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/frame_720p.sh"
-    label   "Test: 720p picture 1:1 (Sharper map ON ends it), then reboot"
+    label   "720p picture 1:1 (standard), then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top.sh"
@@ -54,8 +50,8 @@ script
     label   "Test: show the turn card at the bottom, then reboot"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_lower.sh"
-    label   "Test: hidden turn card, car lower, then reboot"
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_higher.sh"
+    label   "Test: hidden turn card, car higher, then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_standard.sh"

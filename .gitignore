@@ -28,3 +28,5 @@ Thumbs.db
 build/
 dist/
 __pycache__/
+# Logs saved from the car (green menu "Save logs"): can hold phone names and Bluetooth addresses
+run_logs/
