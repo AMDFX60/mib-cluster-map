@@ -522,9 +522,9 @@ int gal_hook_init(const gal_secondary_config *config)
      * Skoda fork: all four insets are scaled as they are. Upstream takes the
      * margin band (91 lines top and bottom on 1010x376) off top and bottom
      * first; this fork does not, because every inset set it ships (the hidden
-     * card 134,104,0,0, the top and bottom card tests) was tuned on the car
-     * with this rule. Upstream's rule would turn 134,104 into 69,21 lines
-     * instead of 216,168, and the turn card would likely come back.
+     * card 75,163,320,320, the green menu's card tests) was tuned on the car
+     * with this rule. Upstream's rule would turn 75,163 into 0,116 lines
+     * instead of 121,263, and the turn card would likely come back.
      *
      * Only ratios above 10000 (windows wider than 5:3), as upstream: the
      * installer never asks for less.

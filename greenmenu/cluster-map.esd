@@ -50,6 +50,10 @@ script
     label   "Test: show the turn card at the bottom, then reboot"
 
 script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_lower.sh"
+    label   "Test: hidden turn card, car lower, then reboot"
+
+script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_standard.sh"
     label   "Turn card as installed (hidden), then reboot"
 

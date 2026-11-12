@@ -4,13 +4,14 @@
 # card at the top of the space the insets leave, centred, and the car in that
 # space too, so each position is a set of insets: the card goes with the
 # space, and the car with it. This fork's settings hide the card (a space too
-# short for it); the tests show it again. Measured on a Skoda 1010x376
+# short for it); the top and bottom tests show it again, the lower test
+# moves the hidden space down. Measured on a Skoda 1010x376
 # cockpit at DPI 110, so only offered for that window. Changes only
 # GAL_SECONDARY_INSETS in the unit's own copy of the settings, keeping the
 # installed value to go back to; takes effect at the next reboot. An install
 # from the card writes the card's insets again.
 #
-#   card_layout.sh top|bottom|standard
+#   card_layout.sh top|bottom|lower|standard
 # Exit 0: switched, reboot. 3: nothing to change. Anything else: failed.
 HERE=`dirname "$0"`
 . "$HERE/lib_app_mount.sh"
@@ -24,11 +25,16 @@ MARK="# Turn card position (switched by the green menu)"
 #   two lower segments (the settings before 1.1.2).
 # bottom: a 400x105 band, centred, 10 above the lower edge, between the two
 #   lower segments.
+# lower: the card still hidden (a full-width space 60 high), but from 35 to
+#   55 percent of the height instead of the installed 25 to 45, for more
+#   road ahead. Maps draws the car a little below the space: at 45 to 65
+#   percent (1.1.2) it went behind the cockpit's lower bar.
 case "$1" in
     top)      NEW=40,127,127,127; WHAT="at the top" ;;
     bottom)   NEW=183,10,200,200; WHAT="at the bottom" ;;
+    lower)    NEW=105,133,0,0; WHAT="hidden, with the car lower" ;;
     standard) NEW=; WHAT="as installed" ;;
-    *) echo "usage: $0 top|bottom|standard" >&2; exit 2 ;;
+    *) echo "usage: $0 top|bottom|lower|standard" >&2; exit 2 ;;
 esac
 
 # uiconfig_fits INSETS THEME PIXEL_ASPECT_E4
@@ -122,7 +128,7 @@ else
     if [ -z "$PAR" ] || [ "$PAR" -eq 0 ] || [ "$PAR" -gt 80000 ]; then PAR=10000; fi
     if ! uiconfig_fits "$NEW" "${THEME:-0}" "$PAR"; then
         echo "Note: with GAL_SECONDARY_UI_THEME=${THEME:-0} these insets do not fit the"
-        echo "setting; the hook will cut each to 127. Theme 0 fits them."
+        echo "setting; the hook will cut the smallest above 127 to 127. Theme 0 fits them."
     fi
     DPI=`sed -n 's/^[ 	]*GAL_SECONDARY_DPI[ 	]*=[ 	]*\([0-9][0-9]*\)[ 	]*$/\1/p' "$CONF" | head -1`
     if [ -n "$DPI" ] && [ "$DPI" != 110 ]; then
