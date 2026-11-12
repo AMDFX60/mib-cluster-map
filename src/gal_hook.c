@@ -51,7 +51,8 @@
  * installer sets margins that leave a band of that shape, and the player
  * crops them off and scales the band to fill the window. UI placement
  * inside the band is controlled separately through UiConfig
- * field 2/contentInsets.
+ * field 2/contentInsets. A nonzero GAL_CROP_TOP or GAL_CROP_BOTTOM instead
+ * sends the phone the full frame and lets the player crop and stretch it.
  *
  * The compiled fallback is dpi 140 and viewing_distance 700. The active
  * package config deliberately overrides DPI to the car-tested value 125.
@@ -142,6 +143,21 @@ static int environment_flag(const char *name)
     const char *value = getenv(name);
     return value != NULL && *value != '\0' && strcmp(value, "0") != 0 &&
            strcmp(value, "false") != 0 && strcmp(value, "no") != 0;
+}
+
+static int parse_crop_rows(const char *value, unsigned *rows)
+{
+    char *end;
+    unsigned long parsed;
+
+    if (value == NULL || *value == '\0') {
+        *rows = 0u;
+        return 1;
+    }
+    parsed = strtoul(value, &end, 10);
+    if (end == value || *end != '\0' || parsed > 240ul) return 0;
+    *rows = (unsigned)parsed;
+    return 1;
 }
 
 /* Read once in gal_hook_init, after the config file, so the controller
@@ -280,7 +296,8 @@ static void load_environment(void)
     value = getenv("GAL_SECONDARY_AAP_DISPLAY_ID");
     if (value != NULL) g_config.display_id = (unsigned)strtoul(value, NULL, 0);
     value = getenv("GAL_SECONDARY_DPI");
-    if (value != NULL) g_config.dpi = (unsigned)strtoul(value, NULL, 0);
+    /* 0 includes "auto", which the installer fills in; keep the built-in value. */
+    if (value != NULL && strtoul(value, NULL, 0) != 0) g_config.dpi = (unsigned)strtoul(value, NULL, 0);
     value = getenv("GAL_SECONDARY_VIEWING_DISTANCE");
     if (value != NULL) g_config.viewing_distance = (unsigned)strtoul(value, NULL, 0);
     value = getenv("GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4");
@@ -293,6 +310,24 @@ static void load_environment(void)
         if (sscanf(value, "%ux%u", &w, &h) == 2 && w <= 400u && h <= 240u) {
             g_config.margin_width = w & ~1u;
             g_config.margin_height = h & ~1u;
+        }
+    }
+    {
+        unsigned crop_top, crop_bottom;
+        const char *top_value = getenv("GAL_CROP_TOP");
+        const char *bottom_value = getenv("GAL_CROP_BOTTOM");
+        if (!parse_crop_rows(top_value, &crop_top) ||
+            !parse_crop_rows(bottom_value, &crop_bottom) ||
+            crop_top + crop_bottom >= 480u) {
+            gal_hook_logf("event=config.crop result=invalid top=%s bottom=%s",
+                          top_value != NULL ? top_value : "0",
+                          bottom_value != NULL ? bottom_value : "0");
+        } else if (crop_top != 0u || crop_bottom != 0u) {
+            /* The player crops the uncropped frame; keep full-frame pixel aspect. */
+            g_config.margin_width = 0u;
+            g_config.margin_height = 0u;
+            gal_hook_logf("event=config.crop result=enabled top=%u bottom=%u source_height=%u",
+                          crop_top, crop_bottom, 480u - crop_top - crop_bottom);
         }
     }
     value = getenv("GAL_SECONDARY_INSETS");
@@ -483,8 +518,18 @@ int gal_hook_init(const gal_secondary_config *config)
      * insets are scaled up by it: the map keeps its scale and the turn card
      * its place, and the extra lines go into detail instead of more map.
      * 10000 (square, the margin band) changes nothing.
+     *
+     * Skoda fork: all four insets are scaled as they are. Upstream takes the
+     * margin band (91 lines top and bottom on 1010x376) off top and bottom
+     * first; this fork does not, because every inset set it ships (the hidden
+     * card 134,104,0,0, the top and bottom card tests) was tuned on the car
+     * with this rule. Upstream's rule would turn 134,104 into 69,21 lines
+     * instead of 216,168, and the turn card would likely come back.
+     *
+     * Only ratios above 10000 (windows wider than 5:3), as upstream: the
+     * installer never asks for less.
      */
-    if (g_config.pixel_aspect_ratio_e4 > 0u && g_config.pixel_aspect_ratio_e4 != 10000u &&
+    if (g_config.pixel_aspect_ratio_e4 > 10000u &&
         g_config.pixel_aspect_ratio_e4 <= 80000u && g_config.dpi <= 0x3fffu &&
         g_config.insets_top <= 0x3fffu && g_config.insets_bottom <= 0x3fffu &&
         g_config.insets_left <= 0x3fffu && g_config.insets_right <= 0x3fffu) {
@@ -497,7 +542,7 @@ int gal_hook_init(const gal_secondary_config *config)
         g_config.insets_bottom = (bottom * par + 5000u) / 10000u;
         g_config.insets_left = (left * par + 5000u) / 10000u;
         g_config.insets_right = (right * par + 5000u) / 10000u;
-        gal_hook_logf("event=config.full_frame result=scaled pixel_aspect_e4=%u dpi=%u->%u insets=%u,%u,%u,%u->%u,%u,%u,%u",
+        gal_hook_logf("event=config.full_frame result=scaled rule=skoda pixel_aspect_e4=%u dpi=%u->%u insets=%u,%u,%u,%u->%u,%u,%u,%u",
                       par, dpi, g_config.dpi, top, bottom, left, right,
                       g_config.insets_top, g_config.insets_bottom,
                       g_config.insets_left, g_config.insets_right);

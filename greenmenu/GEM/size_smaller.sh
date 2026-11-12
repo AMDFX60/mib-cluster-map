@@ -1,5 +1,5 @@
 #!/bin/sh
-. /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
+. "`dirname "$0"`/common.sh"
 # The cluster map 10 DPI smaller (test), in the unit's settings copy.
 echo "Test: map smaller (DPI -10)"
 sh "$PKG/scripts/map_size.sh" smaller

@@ -1,5 +1,5 @@
 #!/bin/sh
-. /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
+. "`dirname "$0"`/common.sh"
 # The cluster map's DPI back to the installed value, in the unit's settings copy.
 echo "Map size as installed"
 sh "$PKG/scripts/map_size.sh" reset

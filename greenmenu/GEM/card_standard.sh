@@ -1,5 +1,5 @@
 #!/bin/sh
-. /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
+. "`dirname "$0"`/common.sh"
 # The turn card back as the settings put it (hidden in this fork), in the unit's settings copy.
 echo "Turn card as installed (standard)"
 sh "$PKG/scripts/card_layout.sh" standard

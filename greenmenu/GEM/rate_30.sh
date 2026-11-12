@@ -1,5 +1,5 @@
 #!/bin/sh
-. /fs/sda0/ClusterMap/GEM/common.sh 2>/dev/null || . `dirname "$0"`/common.sh
+. "`dirname "$0"`/common.sh"
 # The cockpit map at 30 frames a second (test): the 30 fps NavActiveIgnore.jar.
 echo "Test: cockpit map 30 fps mode"
 sh "$PKG/scripts/map_rate.sh" 30

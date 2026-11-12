@@ -16,7 +16,10 @@ TOOLCHAIN_REPO=https://github.com/luka-dev/qnx65-armv7-toolchain.git
 TOOLCHAIN_COMMIT=baa45224f18ae6b13c2e9c77c6663bb8181eb6a1
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 WHAT=${1:-all}
-BUILD_ID=${BUILD_ID:-$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo local)}
+# RELEASE_VERSION first: a release build is usually made before its tag
+# exists, and upstream beta17 shipped a hook that called itself beta16-dirty.
+# BUILD_ID from the environment: the packaging container gets it that way.
+BUILD_ID=${RELEASE_VERSION:-${BUILD_ID:-$(git -C "$ROOT" describe --always --dirty 2>/dev/null || echo local)}}
 
 # Git Bash on Windows differs in three ways, all handled here:
 # - it rewrites /work-style arguments into Windows paths, so path conversion is
@@ -83,6 +86,9 @@ build_hook() {
     n=$($P-nm build/libgal_hook.so | grep -ci emutls || true)
     [ "$n" = "0" ] || { echo "REJECTED: emutls symbols present"; exit 1; }
     $P-readelf -d build/libgal_hook.so | grep NEEDED
+    # The installer'"'"'s check that this unit'"'"'s gal matches a profile.
+    $P-gcc -O2 -Wall -Wextra -I./src tools/profile_check.c src/profile_table.c -o build/profile_check
+    $P-strip -s build/profile_check
   '
 }
 
@@ -144,20 +150,25 @@ package() {
   #   Custom/GreenMenu/*.esd        menu screen (copied to the unit by the toolbox)
   S="$ROOT/dist/sdcard"; D="$S/ClusterMap"
   rm -rf "$S"; mkdir -p "$D/scripts" "$D/lib" "$D/GEM" "$D/docs" "$S/Custom/GreenMenu"
-  cp "$ROOT/build/libgal_hook.so" "$ROOT/build/stream-player" "$D/"
+  cp "$ROOT/build/libgal_hook.so" "$ROOT/build/stream-player" "$ROOT/build/profile_check" "$D/"
   cp "$ROOT/build/libdmdt_flush.so" "$D/lib/"
   # The install scripts treat their own folder as the package root.
   cp "$ROOT"/scripts/enable_hook.sh "$ROOT"/scripts/disable_hook.sh "$ROOT"/scripts/collect_logs.sh \
      "$ROOT"/scripts/turn_by_turn.sh "$ROOT"/scripts/lsd_jar.sh "$D/"
-  mkdir -p "$D/thirdparty" && cp "$ROOT"/thirdparty/mib2-android-auto-vc/VCAndroidAuto.jar "$D/thirdparty/" && \
+  mkdir -p "$D/thirdparty" && cp "$ROOT"/thirdparty/mib2-android-auto-vc/VCAndroidAuto.jar "$ROOT"/thirdparty/mib2-android-auto-vc/VCAndroidAutoMusic.jar "$ROOT"/thirdparty/mib2-android-auto-vc/VCAndroidAutoTurns.jar "$D/thirdparty/" && \
      cp "$ROOT"/thirdparty/mib2-android-auto-vc/LICENSE "$D/thirdparty/VCAndroidAuto.LICENSE"
   cp "$ROOT"/thirdparty/mib2-toolbox/NavActiveIgnore.jar "$D/thirdparty/" && cp "$ROOT"/thirdparty/mib2-toolbox/LICENSE "$D/thirdparty/NavActiveIgnore.LICENSE"
   # The same jar sending the cockpit 30 instead of 20 frames a second, for the
   # green menu's frame-rate switch.
   python3 "$ROOT/tools/make_rate_jar.py" "$ROOT"/thirdparty/mib2-toolbox/NavActiveIgnore.jar "$D/thirdparty/NavActiveIgnore30.jar" 30
+  # The Audi build, for AU57x (thirdparty/navactiveignore-audi/README.md).
+  cp "$ROOT"/thirdparty/navactiveignore-audi/NavActiveIgnore.jar "$D/thirdparty/NavActiveIgnore_Audi.jar" && \
+     cp "$ROOT"/thirdparty/navactiveignore-audi/LICENSE "$D/thirdparty/NavActiveIgnore_Audi.LICENSE"
   cp "$ROOT/scripts/lib_app_mount.sh" "$ROOT/scripts/hook_status.sh" "$ROOT/scripts/lib_resolve_hook_log.sh" \
+     "$ROOT/scripts/lib_unit.sh" "$ROOT/scripts/window_fix.sh" \
      "$ROOT/scripts/lib_cluster_frame.sh" "$ROOT/scripts/full_frame.sh" "$ROOT/scripts/card_layout.sh" \
-     "$ROOT/scripts/map_size.sh" "$ROOT/scripts/map_rate.sh" "$D/scripts/"
+     "$ROOT/scripts/map_size.sh" "$ROOT/scripts/map_rate.sh" \
+     "$ROOT/scripts/lib_keep_settings.sh" "$D/scripts/"
   cp "$ROOT"/greenmenu/GEM/*.sh "$D/GEM/"
   cp "$ROOT/greenmenu/cluster-map.esd" "$S/Custom/GreenMenu/"
   # Software-update route: the same screen, copied to the unit by the update
@@ -169,21 +180,32 @@ package() {
   printf 'While a file whose name starts with UNINSTALL is in the ClusterMap folder,\r\nrunning the update from this card REMOVES the cluster map and restores the\r\noriginal state. Move this file back here (or delete it) to install again.\r\n' > "$D/to uninstall, move this file up one folder/UNINSTALL.txt"
   mkdir -p "$D/to only check compatibility, move this file up one folder"
   printf 'While a file whose name starts with COLLECT is in the ClusterMap folder,\r\nrunning the update from this card INSTALLS NOTHING. It writes a compatibility\r\ncheck to update_result.txt and copies the files a port needs to porting_<train>/.\r\nOnly the menu screen file is copied to the unit. Move this file back here to install.\r\n' > "$D/to only check compatibility, move this file up one folder/COLLECT.txt"
-  # Empty, as in M.I.B.: renamed to Swdlautorun.txt, the unit starts this
-  # update by itself when the card goes in (no service menu). Off by default.
-  : > "$S/_Swdlautorun.txt"
+  # Empty, as in M.I.B.: with this name the unit starts the update by itself
+  # when the card goes in (no service menu). On by default; update_run.sh
+  # renames it to _Swdlautorun.txt when the install finishes, so the update
+  # does not start again with the card still in. Rename it back to
+  # _Swdlautorun.txt to switch autorun off.
+  : > "$S/Swdlautorun.txt"
   cp "$ROOT/config/gal_dualscreen.conf" "$D/gal_dualscreen.conf"
+  # The shipped settings, untouched: the installer compares the card's copy
+  # with it to find the owner's own lines (scripts/lib_keep_settings.sh).
+  cp "$ROOT/config/gal_dualscreen.conf" "$D/scripts/gal_dualscreen.default.conf"
+  # Which package this card is: the installer keeps the owner's lines only
+  # when the card is a different package from the last install's.
+  printf '%s\n' "${RELEASE_VERSION:-$BUILD_ID}" > "$D/scripts/package_version.txt"
+  cp "$ROOT/config/profiles.conf" "$D/profiles.conf"
   cp "$ROOT/README.md" "$ROOT/docs/Install.md" "$D/docs/"
   cp "$ROOT/LICENSE" "$D/LICENSE"
   # The unit's shell needs LF line endings and plain ASCII in everything it runs.
+  python3 "$ROOT/tools/check_scripts.py" "$D" || { echo "REJECTED: scripts use something units lack"; exit 1; }
   bad=$(perl -ne 'if (/\r|[^\x00-\x7F]/) { print "$ARGV\n"; close ARGV }' "$D"/*.sh "$D"/scripts/*.sh "$D"/GEM/*.sh "$D"/final/*.sh "$S"/Custom/GreenMenu/*.esd "$D"/gal_dualscreen.conf | sort -u)
   [ -z "$bad" ] || { echo "REJECTED: CR or non-ASCII in: $bad"; exit 1; }
-  (cd "$D" && shasum -a 256 libgal_hook.so stream-player lib/libdmdt_flush.so > SHA256SUMS.txt)
+  (cd "$D" && shasum -a 256 libgal_hook.so stream-player profile_check profiles.conf lib/libdmdt_flush.so > SHA256SUMS.txt)
   python3 "$ROOT/tools/make_metainfo.py" "$S" "${RELEASE_VERSION:-$BUILD_ID}"
   VER=${RELEASE_VERSION:-$BUILD_ID}
   Z="$ROOT/dist/mib-cluster-map_$VER.zip"
   rm -f "$ROOT"/dist/*.zip "$ROOT"/dist/*.sha256
-  (cd "$S" && zip -qr -X "$Z" ClusterMap Custom metainfo2.txt _Swdlautorun.txt -x '*.DS_Store' -x '._*')
+  (cd "$S" && zip -qr -X "$Z" ClusterMap Custom metainfo2.txt Swdlautorun.txt -x '*.DS_Store' -x '._*')
   (cd "$ROOT/dist" && shasum -a 256 "$(basename "$Z")" > "$(basename "$Z").sha256")
   echo "Packaged: $S"; echo "Archive:  $Z"
   (cd "$S" && find . -type f | sort)

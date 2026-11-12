@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sched.h>
 #include <time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -78,7 +79,6 @@ static int   g_idleMaxBytes         = 0;      // Stationary frame threshold (def
 static int   g_idleHeartbeatHz      = 0;      // Stationary heartbeat keepalive rate in Hz (default: 0 = disabled)
 static bool  g_loopFile             = false;
 static bool  g_verbose              = true;
-static int   g_priority             = 0;      // GAL_PLAYER_PRIORITY, 0 = as spawned
 #ifndef __QNX__
 static char  g_dumpVideoPath[512]   = {0};
 static int   g_dumpMaxFrames        = 0;
@@ -205,6 +205,48 @@ static volatile bool g_newFrameReady = false;
 static uint64_t g_decodedFrameCount = 0;
 static uint64_t g_lastDecodeDurationUs = 0;
 static char g_videoSource[512] = "tcp://127.0.0.1:12346";
+
+/*
+ * Buffered reader for the CarPlay stream (--no-ack). harman-f's hook queues
+ * only 16 pictures for this player, about half a second, and drops the
+ * player when that fills ("gen2 video AU rc=2 -> consumer reset"), which
+ * puts the car's own map back. Reading and decoding on one thread meant one
+ * slow stretch of large pictures was enough (#10, #19, #43: 4 of 5 switches
+ * back in one capture). A second thread now keeps the socket drained into
+ * this buffer, and while the decoder is behind it skips the loop filter to
+ * catch up. Android Auto keeps its ACK pacing and does not use this.
+ */
+static bool g_bufferedReader = false;
+static const size_t kReaderBufBytes   = 8u * 1024u * 1024u;
+static const size_t kReaderBehindOn   = 192u * 1024u;  // skip the loop filter above this backlog
+static const size_t kReaderBehindOff  = 64u * 1024u;   // and restore it below this
+static uint8_t* g_rb = NULL;
+static size_t g_rbHead = 0, g_rbFill = 0, g_rbHigh = 0;
+static bool g_rbClosed = false;
+static uint64_t g_rbBehindEpisodes = 0;
+
+/*
+ * Jumping to the present (#19, #10). The iPhone sends a keyframe only when
+ * asked (2 in 5540 pictures in one capture), so catching up by decoding
+ * faster took 2 to 8 s each time. Above kReaderJumpOn the player asks the
+ * hook for one through its manual resync markers; the reader watches the
+ * incoming bytes for it, and the decoder then skips everything queued before
+ * it, as luka-dev's MHI2Q renderer does. If none comes, nothing is skipped.
+ */
+static const size_t kReaderJumpOn = 512u * 1024u;
+static const char* kResyncEnableMarker = "/tmp/mibr-alt111-resync.enabled";
+static const char* kResyncArmMarker = "/tmp/mibr-alt111-resync-arm";
+static bool g_rbJumpWanted = false, g_rbJumpFound = false;
+static uint64_t g_rbJumpAt = 0;                // stream offset of the keyframe's start code
+static uint64_t g_rbWritten = 0, g_rbRead = 0; // stream offsets written and taken
+static unsigned g_rbScanZeros = 0;
+static bool g_rbScanHeader = false;
+static uint64_t g_rbJumps = 0;
+
+/* Brightness of a recent decoded picture, 0-255, for the health line (#4). */
+static volatile unsigned g_lastLuma = 0;
+static pthread_mutex_t g_rbMutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t  g_rbCond  = PTHREAD_COND_INITIALIZER;
 static bool g_isSocket = false;
 
 int windowWidth  = 800;
@@ -219,42 +261,67 @@ static GLfloat backgroundColor[4] = { 0.0f, 0.0f, 0.0f, 1.0f };
  * the rest of the frame has the window's shape; they are cropped off here
  * and the rest fills the window. A CarPlay stream is asked for at the
  * window's size and fills it as it is. Anything else that still differs in
- * shape is drawn centred at its own shape, with black bars.
- *
+ * shape is drawn centred at its own shape, with black bars. GAL_CROP_TOP or
+ * GAL_CROP_BOTTOM switches Android Auto to a full-frame crop and stretches
+ * the remaining rows over the window.
+ */
+/*
  * Margins cost picture: on a 1010x376 window only 298 of the 480 lines carry
  * map. With CLUSTERMAP_FULL_FRAME the installer sets no margins and declares
  * non-square pixels instead (GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4, 16117 for
  * 1010x376), so the phone draws on the whole frame, squeezed, and the frame
  * is stretched back here. 10000 is square pixels: no change.
+ * (From AMDFX60's fork, reported car-tested on a Skoda Superb.)
  */
 static int g_marginW = 0, g_marginH = 0;
+static int g_cropTop = 0, g_cropBottom = 0;
 static int g_pixelAspectE4 = 10000;
+static int g_priority = 0;      /* GAL_PLAYER_PRIORITY, 0 = as spawned */
 static GLfloat fittedVertices[12];
 static GLfloat croppedTexCoords[8];
 static void fit_frame(int frameW, int frameH) {
     float sx = 1.0f, sy = 1.0f, cu = 0.0f, cv = 0.0f, par = 1.0f;
     int contentW = frameW, contentH = frameH;
+    int marginTop = 0, marginLeft = 0;
+    bool cropConfigured = frameW == 800 && frameH == 480 &&
+                          (g_cropTop > 0 || g_cropBottom > 0) &&
+                          g_cropTop + g_cropBottom < frameH;
     if (frameW == 800 && frameH == 480) {
-        if (g_marginW > 0 || g_marginH > 0) {
+        if (cropConfigured) {
+            contentH = frameH - g_cropTop - g_cropBottom;
+            cu = 0.0f;
+            cv = (float)g_cropTop / (float)frameH;
+            const GLfloat t[8] = {
+                0.0f, cv,
+                1.0f, cv,
+                1.0f, 1.0f - (float)g_cropBottom / (float)frameH,
+                0.0f, 1.0f - (float)g_cropBottom / (float)frameH,
+            };
+            memcpy(croppedTexCoords, t, sizeof t);
+        } else if (g_marginW > 0 || g_marginH > 0) {
+            marginLeft = g_marginW / 2;
+            marginTop = g_marginH / 2;
             contentW = frameW - g_marginW;
             contentH = frameH - g_marginH;
-            cu = (float)g_marginW / 2.0f / (float)frameW;
-            cv = (float)g_marginH / 2.0f / (float)frameH;
+            cu = (float)marginLeft / (float)frameW;
+            cv = (float)marginTop / (float)frameH;
         }
         par = (float)g_pixelAspectE4 / 10000.0f;
     }
-    if (contentW > 0 && contentH > 0) {
+    if (!cropConfigured && contentW > 0 && contentH > 0) {
         float contentAspect = (float)contentW * par / (float)contentH;
         float windowAspect = (float)windowWidth / (float)windowHeight;
         if (contentAspect > windowAspect * 1.01f) sy = windowAspect / contentAspect;
         else if (contentAspect < windowAspect * 0.99f) sx = contentAspect / windowAspect;
     }
     const GLfloat v[12] = { -sx, sy, 0.0f,  sx, sy, 0.0f,  sx, -sy, 0.0f,  -sx, -sy, 0.0f };
-    const GLfloat t[8] = { cu, cv,  1.0f - cu, cv,  1.0f - cu, 1.0f - cv,  cu, 1.0f - cv };
+    if (!cropConfigured) {
+        const GLfloat t[8] = { cu, cv,  1.0f - cu, cv,  1.0f - cu, 1.0f - cv,  cu, 1.0f - cv };
+        memcpy(croppedTexCoords, t, sizeof t);
+    }
     memcpy(fittedVertices, v, sizeof v);
-    memcpy(croppedTexCoords, t, sizeof t);
-    LOG("render: %dx%d frame, %dx%d after margins, pixel aspect %.4f, in a %dx%d window, drawn %dx%d",
-        frameW, frameH, contentW, contentH, par, windowWidth, windowHeight,
+    LOG("render: %dx%d frame, %dx%d after margins/crop, pixel aspect %.4f, crop=%s, in a %dx%d window, drawn %dx%d",
+        frameW, frameH, contentW, contentH, par, cropConfigured ? "stretch" : "off", windowWidth, windowHeight,
         (int)(sx * windowWidth + 0.5f), (int)(sy * windowHeight + 0.5f));
 }
 
@@ -335,6 +402,30 @@ static const char* fragmentShaderSource =
  */
 #define T_ARGS(us) (unsigned long long)((us) / 1000000ULL), (unsigned long long)((us) / 1000ULL % 1000ULL)
 static pid_t g_parentPid = 0;
+/*
+ * The numbers above are VW's, SEAT's and Skoda's. An Audi A4 B9 (K3346, #14)
+ * shows its map in context 72 or 74 instead, so they come from
+ * GAL_VC_CONTEXT, GAL_VC_DISPLAY, GAL_VC_DISPLAYABLE_ID and
+ * GAL_VC_RESTORE_DISPLAYABLE_ID, the hook's own keys. The dmdt arguments are
+ * built once at start-up, so the crash handler only reads them.
+ */
+static unsigned g_vcContext = 70u;
+static unsigned g_vcDisplay = 4u;
+static unsigned g_vcDisplayable = 3u;
+static unsigned g_vcRestore = 33u;
+static char g_dmdtShow[32] = "dc 70 3";
+static char g_dmdtRestore[32] = "dc 70 33";
+static char g_dmdtSelect[32] = "sc 4 70";
+static char g_dmdtCrashCmd[320] = "";
+static void build_dmdt_args() {
+    snprintf(g_dmdtShow, sizeof(g_dmdtShow), "dc %u %u", g_vcContext, g_vcDisplayable);
+    snprintf(g_dmdtRestore, sizeof(g_dmdtRestore), "dc %u %u", g_vcContext, g_vcRestore);
+    snprintf(g_dmdtSelect, sizeof(g_dmdtSelect), "sc %u %u", g_vcDisplay, g_vcContext);
+    snprintf(g_dmdtCrashCmd, sizeof(g_dmdtCrashCmd),
+             "LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib IPL_CONFIG_DIR=/etc/eso/production /eso/bin/apps/dmdt %s 2>/dev/null; "
+             "LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib IPL_CONFIG_DIR=/etc/eso/production /eso/bin/apps/dmdt %s 2>/dev/null",
+             g_dmdtRestore, g_dmdtSelect);
+}
 #ifdef __QNX__
 struct DmdtRun { const char* args; int status; };
 
@@ -371,9 +462,85 @@ static bool g_switchClosed = false;    /* g_switchLock: shutting down */
 
 static void* display_switch_thread(void* arg) {
     (void)arg;
-    dmdt_pair("dc 70 3", "sc 4 70", "cluster switched to the player");
+    dmdt_pair(g_dmdtShow, g_dmdtSelect, "cluster switched to the player");
     return NULL;
 }
+
+#ifdef __QNX__
+#include <signal.h>
+#include <sys/select.h>
+#include <sys/wait.h>
+/*
+ * The settings hold the map window's size as the installer read it, and the
+ * display manager only lists the window once the cockpit has shown it, so that
+ * can be a guess (#52, #56). When the player starts the cockpit is up: use the
+ * real size, because a wrong one arrives on the cockpit as stripes. This run's
+ * picture was laid out for the old size and is drawn centred at its own shape;
+ * window_fix.sh corrects the settings for the next start.
+ */
+static bool g_windowFromArgs = false;
+static void check_map_window() {
+    char cmd[256], out[4096], type[32];
+    int fds[2], w = 0, h = 0, found = 0;
+    size_t used = 0u;
+    pid_t pid;
+    if (g_windowFromArgs) return;
+    if (pipe(fds) != 0) return;
+    pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        return;
+    }
+    if (pid == 0) {
+        dup2(fds[1], 1);
+        close(fds[0]);
+        close(fds[1]);
+        execl("/bin/sh", "sh", "-c",
+              "cd /eso && LD_PRELOAD=/eso/lib/gal_dualscreen/libdmdt_flush.so "
+              "LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib IPL_CONFIG_DIR=/etc/eso/production "
+              "exec ./bin/apps/dmdt gd 2>/dev/null", (char*)NULL);
+        _exit(127);
+    }
+    close(fds[1]);
+    /* Two seconds at most: a stuck display tool must not cost the map. */
+    for (int waited = 0; waited < 20 && used + 1u < sizeof(out);) {
+        struct timeval tv = { 0, 100000 };
+        fd_set rd;
+        FD_ZERO(&rd);
+        FD_SET(fds[0], &rd);
+        int ready = select(fds[0] + 1, &rd, NULL, NULL, &tv);
+        if (ready == 0) { ++waited; continue; }
+        if (ready < 0) break;
+        ssize_t n = read(fds[0], out + used, sizeof(out) - 1u - used);
+        if (n <= 0) break;
+        used += (size_t)n;
+    }
+    close(fds[0]);
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    out[used] = 0;
+    for (char* line = strtok(out, "\r\n"); line; line = strtok(NULL, "\r\n")) {
+        unsigned id = 0u;
+        int lw = 0, lh = 0;
+        if (sscanf(line, " %u %31s %d x %d", &id, type, &lw, &lh) == 4 && id == g_vcRestore) {
+            w = lw; h = lh; found = 1;
+        }
+    }
+    if (!found || w < 320 || w > 1920 || h < 160 || h > 1080) {
+        LOG("display: window %u not listed, keeping %dx%d from the settings",
+            g_vcRestore, windowWidth, windowHeight);
+        return;
+    }
+    if (w == windowWidth && h == windowHeight) return;
+    LOG("display: the cockpit's map window is %dx%d, the settings say %dx%d; using %dx%d and correcting the settings for the next start",
+        w, h, windowWidth, windowHeight, w, h);
+    windowWidth = w;
+    windowHeight = h;
+    snprintf(cmd, sizeof(cmd), "sh /eso/lib/gal_dualscreen/window_fix.sh %d %d >/dev/null 2>&1 &", w, h);
+    if (system(cmd) != 0) LOG("display: could not start window_fix.sh");
+}
+#endif
 
 /* Decoder thread, at the phone's first keyframe; once per player. */
 static void request_display_switch() {
@@ -400,7 +567,7 @@ static void execute_final_commands() {
     pthread_mutex_unlock(&g_switchLock);
     if (!started) return;
     pthread_join(g_switchThread, NULL);
-    dmdt_pair("dc 70 33", "sc 4 70", "stock Kombi map restored");
+    dmdt_pair(g_dmdtRestore, g_dmdtSelect, "stock Kombi map restored");
 }
 #else
 static void request_display_switch() {}
@@ -552,10 +719,9 @@ static void nvss_disable_for_boot(const char*) {}
 static void write_ack();
 
 static void crash_signal_handler(int sig) {
-    fprintf(stderr, "\n[stream-player CRASH] Caught fatal signal %d! Emergency restoring display context 33...\n", sig);
+    fprintf(stderr, "\n[stream-player CRASH] Caught fatal signal %d! Emergency restoring the stock cluster map...\n", sig);
 #ifdef __QNX__
-    system("LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib IPL_CONFIG_DIR=/etc/eso/production /eso/bin/apps/dmdt dc 70 33 2>/dev/null");
-    system("LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib IPL_CONFIG_DIR=/etc/eso/production /eso/bin/apps/dmdt sc 4 70 2>/dev/null");
+    if (g_dmdtCrashCmd[0]) system(g_dmdtCrashCmd);
 #endif
     signal(sig, SIG_DFL);
     raise(sig);
@@ -688,6 +854,131 @@ static bool connect_retry_allowed() {
     return g_running;
 }
 
+/* Reader side: drain the socket into g_rb until it closes or the buffer fills. */
+/*
+ * The last SPS and PPS the stream carried. CarPlay sends them once, so a
+ * parser restarted at a keyframe would never see them again: "non-existing
+ * PPS 0 referenced" at every frame from then on (a Leon on beta14, 11194
+ * lines in 11 minutes). Only the parser loses them, the decoder keeps its own.
+ */
+static uint8_t g_paramSets[1024];
+static size_t  g_paramSetsLen = 0;
+
+static void remember_param_sets(const uint8_t* p, size_t n) {
+    for (size_t i = 0; i + 3 < n; i++) {
+        if (p[i] != 0 || p[i + 1] != 0 || p[i + 2] != 1) continue;
+        int type = p[i + 3] & 0x1f;
+        if (type != 7 && type != 8) continue;
+        size_t end = i + 3;
+        while (end + 2 < n && !(p[end] == 0 && p[end + 1] == 0 && p[end + 2] <= 1)) end++;
+        if (end + 2 >= n) return; /* runs past this read; the next set will do */
+        size_t len = end - i;
+        if (type == 7) g_paramSetsLen = 0; /* a new SPS starts a new set */
+        if (g_paramSetsLen + len <= sizeof g_paramSets) {
+            memcpy(g_paramSets + g_paramSetsLen, p + i, len);
+            g_paramSetsLen += len;
+        }
+        i = end - 1;
+    }
+}
+
+static void* ReaderThreadFunc(void* arg) {
+    int sock = (int)(intptr_t)arg;
+    uint8_t* tmp = (uint8_t*)malloc(131072);
+    bool overflow = false;
+    while (tmp && g_running) {
+        ssize_t n = recv(sock, tmp, 131072, 0);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) {
+            if (n < 0) LOG("socket: recv error (errno=%d) t=%llu.%03llu", errno, T_ARGS(now_us()));
+            else LOG("socket: stream closed t=%llu.%03llu", T_ARGS(now_us()));
+            break;
+        }
+        pthread_mutex_lock(&g_rbMutex);
+        if ((size_t)n > kReaderBufBytes - g_rbFill) {
+            overflow = true;
+        } else {
+            size_t tail = (g_rbHead + g_rbFill) % kReaderBufBytes;
+            size_t first = kReaderBufBytes - tail < (size_t)n ? kReaderBufBytes - tail : (size_t)n;
+            memcpy(g_rb + tail, tmp, first);
+            memcpy(g_rb, tmp + first, (size_t)n - first);
+            /* Find the asked-for keyframe: start code 00 00 01, NAL type 5. */
+            for (ssize_t i = 0; g_rbJumpWanted && !g_rbJumpFound && i < n; ++i) {
+                uint8_t b = tmp[i];
+                if (g_rbScanHeader) {
+                    g_rbScanHeader = false;
+                    if ((b & 0x1f) == 5 && g_rbWritten + (uint64_t)i >= 3u) {
+                        g_rbJumpAt = g_rbWritten + (uint64_t)i - 3u;
+                        g_rbJumpFound = true;
+                    }
+                }
+                if (b == 0) { ++g_rbScanZeros; continue; }
+                if (b == 1 && g_rbScanZeros >= 2) g_rbScanHeader = true;
+                g_rbScanZeros = 0;
+            }
+            g_rbWritten += (uint64_t)n;
+            g_rbFill += (size_t)n;
+            if (g_rbFill > g_rbHigh) g_rbHigh = g_rbFill;
+            pthread_cond_signal(&g_rbCond);
+        }
+        pthread_mutex_unlock(&g_rbMutex);
+        if (overflow) {
+            LOG("socket: reader buffer full (%zu KB behind) t=%llu.%03llu",
+                kReaderBufBytes / 1024u, T_ARGS(now_us()));
+            break;
+        }
+    }
+    free(tmp);
+    pthread_mutex_lock(&g_rbMutex);
+    g_rbClosed = true;
+    pthread_cond_broadcast(&g_rbCond);
+    pthread_mutex_unlock(&g_rbMutex);
+    return NULL;
+}
+
+/* Decoder side: like recv(), 0 once the reader has finished and the buffer is
+ * empty. *skipped is how much was dropped to reach an asked-for keyframe. */
+static ssize_t reader_take(uint8_t* out, size_t max, size_t* backlog, size_t* skipped) {
+    pthread_mutex_lock(&g_rbMutex);
+    while (g_rbFill == 0 && !g_rbClosed && g_running) pthread_cond_wait(&g_rbCond, &g_rbMutex);
+    *skipped = 0;
+    if (g_rbJumpFound) {
+        if (g_rbJumpAt > g_rbRead && g_rbJumpAt - g_rbRead < g_rbFill) {
+            size_t drop = (size_t)(g_rbJumpAt - g_rbRead);
+            g_rbHead = (g_rbHead + drop) % kReaderBufBytes;
+            g_rbFill -= drop;
+            g_rbRead += drop;
+            *skipped = drop;
+        }
+        g_rbJumpFound = g_rbJumpWanted = false;
+    }
+    size_t n = g_rbFill < max ? g_rbFill : max;
+    size_t first = kReaderBufBytes - g_rbHead < n ? kReaderBufBytes - g_rbHead : n;
+    memcpy(out, g_rb + g_rbHead, first);
+    memcpy(out + first, g_rb, n - first);
+    g_rbHead = (g_rbHead + n) % kReaderBufBytes;
+    g_rbFill -= n;
+    g_rbRead += n;
+    *backlog = g_rbFill;
+    pthread_mutex_unlock(&g_rbMutex);
+    return (ssize_t)n;
+}
+
+/* Ask harman-f's hook for a keyframe (its manual resync) and watch for it. */
+static void ask_for_keyframe(size_t backlog) {
+    int fd = open(kResyncArmMarker, O_CREAT | O_WRONLY, 0644);
+    if (fd >= 0) close(fd);
+    pthread_mutex_lock(&g_rbMutex);
+    g_rbJumpWanted = true;
+    g_rbJumpFound = false;
+    g_rbScanZeros = 0;
+    g_rbScanHeader = false;
+    pthread_mutex_unlock(&g_rbMutex);
+    if (g_rbJumps < 50)
+        LOG("decoder: %zu KB behind, asked the phone for a keyframe t=%llu.%03llu",
+            backlog / 1024u, T_ARGS(now_us()));
+}
+
 static void* DecoderThreadFunc(void* arg) {
     (void)arg;
     LOG("decoder: background worker thread active");
@@ -776,6 +1067,11 @@ static void* DecoderThreadFunc(void* arg) {
     bool hasDecodedKeyframe = false;
     bool hasRenderedWarmupFrame = false;
     bool gotData = false;
+    bool behind = false;
+    pthread_t readerThread;
+    bool readerRunning = false;
+    uint64_t nextReaderLogUs = 0;
+    uint64_t nextKeyframeAskUs = 0;
 
     while (g_running) {
         int sock = -1;
@@ -841,9 +1137,75 @@ static void* DecoderThreadFunc(void* arg) {
             }
         }
 
+        if (is_socket && sock >= 0 && g_bufferedReader && !readerRunning) {
+            if (!g_rb) g_rb = (uint8_t*)malloc(kReaderBufBytes);
+            g_rbHead = g_rbFill = 0;
+            g_rbClosed = false;
+            g_rbWritten = g_rbRead = 0;
+            g_rbJumpWanted = g_rbJumpFound = false;
+            if (g_rb && pthread_create(&readerThread, NULL, ReaderThreadFunc, (void*)(intptr_t)sock) == 0) {
+                readerRunning = true;
+                int fd = open(kResyncEnableMarker, O_CREAT | O_WRONLY, 0644);
+                if (fd >= 0) close(fd);
+                LOG("socket: buffered reader on (%zu KB)", kReaderBufBytes / 1024u);
+            } else {
+                LOG("socket: buffered reader unavailable; reading directly");
+            }
+        }
+
         while (g_running) {
             ssize_t bytes_read = 0;
-            if (is_socket) {
+            if (readerRunning) {
+                size_t backlog = 0, skipped = 0;
+                bytes_read = reader_take(inbuf, 131072, &backlog, &skipped);
+                if (bytes_read == 0) break; /* the reader logged why */
+                remember_param_sets(inbuf, (size_t)bytes_read);
+                if (skipped > 0) {
+                    /* Start clean at the keyframe: no half picture from before it. */
+                    av_parser_close(parser);
+                    parser = av_parser_init(codec->id);
+                    if (!parser) { LOGE("avcodec: parser init failed"); g_running = false; break; }
+                    avcodec_flush_buffers(codecCtx);
+                    if (g_paramSetsLen > 0) {
+                        uint8_t* unused = NULL;
+                        int unusedSize = 0;
+                        av_parser_parse2(parser, codecCtx, &unused, &unusedSize,
+                                         g_paramSets, (int)g_paramSetsLen,
+                                         AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+                    }
+                    if (++g_rbJumps <= 50)
+                        LOG("decoder: keyframe arrived; skipped %zu KB queued before it, the picture jumps to the present t=%llu.%03llu",
+                            skipped / 1024u, T_ARGS(now_us()));
+                }
+                if (backlog > kReaderJumpOn && now_us() >= nextKeyframeAskUs) {
+                    ask_for_keyframe(backlog);
+                    nextKeyframeAskUs = now_us() + 3000000ULL;
+                }
+                if (!gotData) {
+                    gotData = true;
+                    LOG("socket: first data t=%llu.%03llu", T_ARGS(now_us()));
+                }
+                if (!behind && backlog > kReaderBehindOn) {
+                    behind = true;
+                    ++g_rbBehindEpisodes;
+                    codecCtx->skip_loop_filter = AVDISCARD_ALL;
+                    if (g_rbBehindEpisodes <= 20)
+                        LOG("decoder: %zu KB behind, loop filter off to catch up t=%llu.%03llu",
+                            backlog / 1024u, T_ARGS(now_us()));
+                } else if (behind && backlog < kReaderBehindOff) {
+                    behind = false;
+                    codecCtx->skip_loop_filter = (AVDiscard)g_ffmpegSkipLoopFilter;
+                    if (g_rbBehindEpisodes <= 20)
+                        LOG("decoder: caught up t=%llu.%03llu", T_ARGS(now_us()));
+                }
+                uint64_t now = now_us();
+                if (now >= nextReaderLogUs) {
+                    if (nextReaderLogUs)
+                        LOG("socket: reader backlog now %zu KB, most %zu KB, catch-ups %llu",
+                            backlog / 1024u, g_rbHigh / 1024u, (unsigned long long)g_rbBehindEpisodes);
+                    nextReaderLogUs = now + 30000000ULL;
+                }
+            } else if (is_socket) {
                 bytes_read = recv(sock, inbuf, 131072, 0);
                 if (bytes_read < 0) {
                     if (errno == EINTR) continue;
@@ -969,6 +1331,12 @@ static void* DecoderThreadFunc(void* arg) {
                         for (int y = 0; y < h; ++y) {
                             memcpy(dstY + y * w, frame->data[0] + y * frame->linesize[0], w);
                         }
+                        if ((g_decodedFrameCount & 31u) == 0) {
+                            uint64_t sum = 0, count = 0;
+                            for (int y = 8; y < h; y += 16)
+                                for (int x = 8; x < w; x += 16, ++count) sum += dstY[y * w + x];
+                            g_lastLuma = count ? (unsigned)(sum / count) : 0u;
+                        }
                         // Copy U plane
                         for (int y = 0; y < h / 2; ++y) {
                             memcpy(dstU + y * (w / 2), frame->data[1] + y * frame->linesize[1], w / 2);
@@ -1007,6 +1375,17 @@ static void* DecoderThreadFunc(void* arg) {
             }
         }
 
+        if (readerRunning) {
+            /* Unblock the reader's recv() before joining it. */
+            if (sock >= 0) shutdown(sock, SHUT_RDWR);
+            pthread_cond_broadcast(&g_rbCond);
+            pthread_join(readerThread, NULL);
+            readerRunning = false;
+            unlink(kResyncEnableMarker);
+            LOG("socket: reader backlog most %zu KB, catch-ups %llu, jumps to a keyframe %llu",
+                g_rbHigh / 1024u, (unsigned long long)g_rbBehindEpisodes,
+                (unsigned long long)g_rbJumps);
+        }
         if (sock >= 0) { g_streamSock = -1; close(sock); sock = -1; }
         if (infile) { fclose(infile); infile = NULL; }
         if (is_socket) {
@@ -1167,6 +1546,12 @@ static void load_player_config() {
                     g_marginW = w & ~1;
                     g_marginH = h & ~1;
                 }
+            } else if (strcmp(key, "GAL_CROP_TOP") == 0) {
+                int v = atoi(val);
+                if (v >= 0 && v <= 240) g_cropTop = v;
+            } else if (strcmp(key, "GAL_CROP_BOTTOM") == 0) {
+                int v = atoi(val);
+                if (v >= 0 && v <= 240) g_cropBottom = v;
             } else if (strcmp(key, "GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4") == 0) {
                 /* Wide enough for any window of 320..1920 by 160..1080. */
                 int e4 = atoi(val);
@@ -1174,6 +1559,18 @@ static void load_player_config() {
             } else if (strcmp(key, "GAL_PLAYER_NVSS_OUTPUT") == 0) {
                 int o = atoi(val);
                 if (o == 0 || o == 1) g_nvssOutput = (unsigned)o;
+            } else if (strcmp(key, "GAL_VC_CONTEXT") == 0) {
+                int v = atoi(val);
+                if (v > 0 && v < 1000) g_vcContext = (unsigned)v;
+            } else if (strcmp(key, "GAL_VC_DISPLAY") == 0) {
+                int v = atoi(val);
+                if (v > 0 && v < 1000) g_vcDisplay = (unsigned)v;
+            } else if (strcmp(key, "GAL_VC_DISPLAYABLE_ID") == 0) {
+                int v = atoi(val);
+                if (v > 0 && v < 1000) g_vcDisplayable = (unsigned)v;
+            } else if (strcmp(key, "GAL_VC_RESTORE_DISPLAYABLE_ID") == 0) {
+                int v = atoi(val);
+                if (v > 0 && v < 1000) g_vcRestore = (unsigned)v;
             } else if (strcmp(key, "GAL_PLAYER_STATS") == 0) {
                 /* 0 drops the once-a-second STATS line; everything else is still logged. */
                 g_verbose = atoi(val) != 0;
@@ -1185,6 +1582,37 @@ static void load_player_config() {
         fclose(f);
         break; // Stop at first found config file
     }
+    /*
+     * gal passes the frame it asked the phone for; it wins over the file,
+     * which may have been switched since gal started (full_frame.sh).
+     */
+    env_val = getenv("GAL_SECONDARY_MARGINS");
+    if (env_val) {
+        int w = 0, h = 0;
+        if (sscanf(env_val, "%dx%d", &w, &h) == 2 && w >= 0 && w <= 400 && h >= 0 && h <= 240) {
+            g_marginW = w & ~1;
+            g_marginH = h & ~1;
+        }
+    }
+    env_val = getenv("GAL_CROP_TOP");
+    if (env_val) {
+        int v = atoi(env_val);
+        if (v >= 0 && v <= 240) g_cropTop = v;
+    }
+    env_val = getenv("GAL_CROP_BOTTOM");
+    if (env_val) {
+        int v = atoi(env_val);
+        if (v >= 0 && v <= 240) g_cropBottom = v;
+    }
+    env_val = getenv("GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4");
+    if (env_val) {
+        int e4 = atoi(env_val);
+        if (e4 >= 1000 && e4 <= 80000) g_pixelAspectE4 = e4;
+    }
+    build_dmdt_args();
+    if (g_vcContext != 70u || g_vcDisplay != 4u || g_vcDisplayable != 3u || g_vcRestore != 33u)
+        LOG("dmdt: cockpit context %u on display %u, player displayable %u, stock map %u (from the settings)",
+            g_vcContext, g_vcDisplay, g_vcDisplayable, g_vcRestore);
 
     // Environment variables override config file
     const char* env_threads = getenv("GAL_PLAYER_THREADS");
@@ -1200,36 +1628,6 @@ static void load_player_config() {
     if (env_hb) {
         g_idleHeartbeatHz = atoi(env_hb);
     }
-}
-
-/*
- * GAL_PLAYER_PRIORITY: raise the player to this priority, never lower it.
- * Set on the main thread before any other starts, so the decoder, FFmpeg's
- * and the display-switch threads inherit it. The player is spawned from gal
- * and otherwise runs at whatever priority that thread had (QNX's default is
- * 10). kamgurgul's MHI2Q renderer stalled for 300-650 ms at a time behind the
- * compositor at 10 and runs at 15; a little above 10 is the cautious step,
- * since a software decoder far above gal and the interface could starve them.
- */
-static void apply_player_priority() {
-#ifdef __QNX__
-    if (g_priority <= 0) return;
-    struct sched_param param;
-    int policy = 0;
-    if (pthread_getschedparam(pthread_self(), &policy, &param) != 0) {
-        LOGE("priority: cannot read the current priority");
-        return;
-    }
-    int was = param.sched_priority;
-    if (was >= g_priority) {
-        LOG("priority: %d, already at or above GAL_PLAYER_PRIORITY=%d", was, g_priority);
-        return;
-    }
-    param.sched_priority = g_priority;
-    int rc = pthread_setschedparam(pthread_self(), policy, &param);
-    if (rc != 0) LOGE("priority: %d -> %d failed (%d)", was, g_priority, rc);
-    else LOG("priority: %d -> %d (GAL_PLAYER_PRIORITY)", was, g_priority);
-#endif
 }
 
 // ---------------- Application Entry Point ----------------
@@ -1282,6 +1680,36 @@ static void ack_connect() {}
 static void write_ack() {}
 #endif
 
+/*
+ * GAL_PLAYER_PRIORITY: raise the player to this priority, never lower it.
+ * Set on the main thread before any other starts, so the decoder, FFmpeg's
+ * and the display-switch threads inherit it. The player is spawned from gal
+ * and otherwise runs at whatever priority that thread had (QNX's default is
+ * 10). A little above 10 is the cautious step: a software decoder far above
+ * gal and the interface could starve them. Idea from AMDFX60's fork; not
+ * car-tested. 0 (the default) changes nothing.
+ */
+static void apply_player_priority() {
+#ifdef __QNX__
+    if (g_priority <= 0) return;
+    struct sched_param param;
+    int policy = 0;
+    if (pthread_getschedparam(pthread_self(), &policy, &param) != 0) {
+        LOGE("priority: cannot read the current priority");
+        return;
+    }
+    int was = param.sched_priority;
+    if (was >= g_priority) {
+        LOG("priority: %d, already at or above GAL_PLAYER_PRIORITY=%d", was, g_priority);
+        return;
+    }
+    param.sched_priority = g_priority;
+    int rc = pthread_setschedparam(pthread_self(), policy, &param);
+    if (rc != 0) LOGE("priority: %d -> %d failed (%d)", was, g_priority, rc);
+    else LOG("priority: %d -> %d (GAL_PLAYER_PRIORITY)", was, g_priority);
+#endif
+}
+
 int main(int argc, char* argv[]) {
     g_parentPid = getppid();
     int lock_fd = check_and_acquire_instance_lock();
@@ -1297,6 +1725,7 @@ int main(int argc, char* argv[]) {
 #if defined(__QNX__) || defined(__linux__)
             g_noAck = true;
 #endif
+            g_bufferedReader = true;
         } else if (strncmp(argv[i], "--size=", 7) == 0) {
             /* Window size; overrides GAL_PLAYER_WINDOW. For testing. */
             int w = 0, h = 0;
@@ -1304,6 +1733,9 @@ int main(int argc, char* argv[]) {
                 w >= 320 && w <= 1920 && h >= 160 && h <= 1080) {
                 windowWidth = w;
                 windowHeight = h;
+#ifdef __QNX__
+                g_windowFromArgs = true;
+#endif
             }
         } else if (strcmp(argv[i], "--loop") == 0) {
             g_loopFile = true;
@@ -1359,6 +1791,9 @@ int main(int argc, char* argv[]) {
      * This thread only reports statistics and waits for the end of the
      * stream; the decoder thread decodes, switches the cluster and ACKs.
      */
+#ifdef __QNX__
+    check_map_window();
+#endif
     /* The hardware decoder fills the window with the frame, so it is used
      * only when the two are the same size. */
     if (g_hwDecoder && (windowWidth != 800 || windowHeight != 480)) {
@@ -1717,6 +2152,18 @@ int main(int argc, char* argv[]) {
             uint64_t curDec = g_decodedFrameCount;
             decodeFps = (double)(curDec - lastDecCount) * 1000000.0 / (double)elapsedUs;
             lastDecCount = curDec;
+
+            /* Once a minute, always: is the picture still coming, and is it black? (#4) */
+            static uint64_t s_healthUs = 0, s_healthDec = 0;
+            if (s_healthUs == 0) {
+                s_healthUs = frameEndUs;
+                s_healthDec = curDec;
+            } else if (frameEndUs - s_healthUs >= 60000000ULL) {
+                LOG("health: %llu pictures decoded in the last minute; brightness %u of 255 (under 16 is black) t=%llu.%03llu",
+                    (unsigned long long)(curDec - s_healthDec), g_lastLuma, T_ARGS(frameEndUs));
+                s_healthUs = frameEndUs;
+                s_healthDec = curDec;
+            }
             frameCount = 0;
             lastFpsUs = frameEndUs;
 

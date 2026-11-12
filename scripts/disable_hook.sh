@@ -103,10 +103,25 @@ carplay_pf_close
 # during a real recovery, which is the worst time to find out.
 # Confirmed by VcMOSTRenderMqb's stream player (dc 70 3 / sc 4 70,
 # restoring with dc 70 33 / sc 4 70) and by on-car notes.
+# Those are VW/SEAT/Skoda numbers; a car whose settings name another
+# cockpit context (Audi, #14) is restored with its own.
+vc_setting()
+{
+    v=
+    for f in "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" "$CARD_ROOT/gal_dualscreen.conf"; do
+        [ -r "$f" ] || continue
+        v=`sed -n "s/^$1=\([0-9][0-9]*\)[ 	]*\r*$/\1/p" "$f" 2>/dev/null | tail -1`
+        if [ -n "$v" ]; then break; fi
+    done
+    echo "${v:-$2}"
+}
+VC_CTX=`vc_setting GAL_VC_CONTEXT 70`
+VC_DISP=`vc_setting GAL_VC_DISPLAY 4`
+VC_STOCK=`vc_setting GAL_VC_RESTORE_DISPLAYABLE_ID 33`
 VC_ROUTE_RESTORED=0
 if [ -x /eso/bin/apps/dmdt ]; then
-    if (cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt dc 70 33) &&
-       (cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt sc 4 70); then
+    if (cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt dc $VC_CTX $VC_STOCK) &&
+       (cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt sc $VC_DISP $VC_CTX); then
         VC_ROUTE_RESTORED=1
     fi
 fi
@@ -119,8 +134,8 @@ else
     echo "Original persistent smartphone_integrator.json restored."
     echo "  WARNING: could not set the VC route back to stock displayable 33 via dmdt." >&2
     echo "  If the cockpit was switched to displayable 3, restore it manually with:" >&2
-    echo "    cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt dc 70 33" >&2
-    echo "    cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt sc 4 70" >&2
+    echo "    cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt dc $VC_CTX $VC_STOCK" >&2
+    echo "    cd /eso && IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt sc $VC_DISP $VC_CTX" >&2
 fi
 echo "  restored from: $RESTORE_SOURCE"
 
@@ -143,6 +158,7 @@ if [ -d "$PRELOAD_WRITE_DIR" ] || [ -f "$APP_MOUNT/eso/lib/libdmdt_flush.so" ] |
         rm -f "$APP_MOUNT/eso/lib/libdmdt_flush.so" 2>/dev/null || true
         # The safe area the CarPlay map of packages before 1.1.3 left.
         rm -f "$APP_MOUNT/root/mibr-carplay111-safearea.conf" 2>/dev/null || true
+        rm -f "$APP_MOUNT/root/mibr-carplay111-nav-query.enabled" "$APP_MOUNT/root/mibr-carplay111-nav."* 2>/dev/null || true
         # enable_hook.sh put the player here; nothing else on the unit uses it.
         if rm -f "$APP_MOUNT/navigation/stream-player" 2>/dev/null; then
             echo "  removed player: $APP_MOUNT/navigation/stream-player"
@@ -165,15 +181,19 @@ trap - 0 1 2 15
 # Full revert of the Java start-up script, so the unit ends up as it was before
 # the install: put the turn-by-turn jar's line back if the installer took it
 # out, and take NavActiveIgnore out again if the installer added it. Skipped
-# with --keep-jar-removed. A failure leaves lsd.sh untouched and is reported.
-if [ "${1:-}" != "--keep-jar-removed" ] && [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
+# A failure leaves lsd.sh untouched and is reported. --keep-jar-removed (the
+# switch to turn-by-turn arrows, which adds that jar itself next) skips only
+# the turn-by-turn restore: everything the installer added still comes out,
+# or the arrows jar would be loaded beside the music or turns jar, which
+# carry the same classes, and no later uninstall would find them.
+if [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
     echo
     # The green menu's 30 fps test: the package's 20 fps jar back, before the
     # line goes below or for an owner's own NavActiveIgnore line that stays.
     if [ -r "$CARD_ROOT/scripts/map_rate.sh" ]; then
         RATE_OUT=`sh "$CARD_ROOT/scripts/map_rate.sh" 20 2>&1` && echo "$RATE_OUT"
     fi
-    if [ -f /mnt/app/eso/hmi/lsd/.aacluster_tbt_removed ]; then
+    if [ "${1:-}" != "--keep-jar-removed" ] && [ -f /mnt/app/eso/hmi/lsd/.aacluster_tbt_removed ]; then
         sh "$CARD_ROOT/turn_by_turn.sh" restore || \
             echo "WARNING: could not restore the turn-by-turn jar line; lsd.sh is unchanged." >&2
     fi
@@ -192,6 +212,31 @@ if [ "${1:-}" != "--keep-jar-removed" ] && [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
         else
             echo "WARNING: could not remove the NavActiveIgnore line; lsd.sh is unchanged." >&2
         fi
+    fi
+    # The music and turns jars go with the map (CLUSTERMAP_MUSIC_INFO,
+    # CLUSTERMAP_TURN_INFO), and so does the CarPlay map's steering-wheel
+    # zoom (ClusterMapWheelZoom.jar), but only the ones the installer added.
+    for EXTRA in music:VCAndroidAutoMusic.jar turns:VCAndroidAutoTurns.jar wheelzoom:ClusterMapWheelZoom.jar; do
+        EXTRA_MARKER=/mnt/app/eso/hmi/lsd/.aacluster_${EXTRA%%:*}_added
+        EXTRA_JAR=${EXTRA#*:}
+        if [ ! -f "$EXTRA_MARKER" ]; then
+            continue
+        fi
+        if sh "$CARD_ROOT/lsd_jar.sh" remove $EXTRA_JAR; then
+            mount -uw /mnt/app 2>/dev/null && {
+                rm -f "$EXTRA_MARKER"
+                mount -ur /mnt/app 2>/dev/null || true
+            }
+            echo "Removed $EXTRA_JAR, which the installer had added."
+        else
+            echo "WARNING: could not remove $EXTRA_JAR; lsd.sh is unchanged." >&2
+        fi
+    done
+    if [ -f /mnt/app/root/vcaa_turn_text ]; then
+        mount -uw /mnt/app 2>/dev/null && {
+            rm -f /mnt/app/root/vcaa_turn_text
+            mount -ur /mnt/app 2>/dev/null || true
+        }
     fi
 fi
 echo "Reboot the unit to run GAL without the hook."

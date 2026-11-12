@@ -11,6 +11,7 @@
 #include "vc_player_mgr.h"
 #include "focus_ctl.h"
 #include "firmware_profiles.h"
+#include "nav_translate.h"
 
 #include <dlfcn.h>
 #include <pthread.h>
@@ -305,17 +306,18 @@ static void add_configuration(void *sink, int resolution, int fps,
 
 static const gal_profile *g_profile;
 static gal_profile g_trial_profile;
-static char g_trial_name[48];
+static gal_profile g_profiles[GAL_PROFILE_MAX];
+static unsigned g_profile_count;
 
 /*
  * GAL_PROFILE_TRIAL: a profile supplied in gal_dualscreen.conf, for testing a
  * port without rebuilding. Twelve colon-separated fields in the order of
  * struct gal_profile, numbers in hex, without car_tested and the three
- * settings fields (which take the first built-in profile's values):
+ * settings fields (which take the values every profile so far has used):
  *
  *   name:controller:impl_vt:cb_vt:ctor:first_word:size:ctl_cfg:ctl_creator:h_count:h_data:entry
  *
- * It is used only when no built-in profile matches, and only if its three
+ * It is used only when no profile in profiles.conf matches, and only if its three
  * fingerprint addresses equal what this gal actually exports -- so a trial
  * line left in the file cannot be applied to a different build.
  */
@@ -323,7 +325,7 @@ static const gal_profile *parse_trial_profile(void)
 {
     const char *v = getenv("GAL_PROFILE_TRIAL");
     unsigned f[11];
-    char name[sizeof g_trial_name];
+    char name[GAL_PROFILE_NAME_MAX];
 
     if (v == NULL || *v == '\0') return NULL;
     if (sscanf(v, "%47[^:]:%x:%x:%x:%x:%x:%x:%x:%x:%x:%x:%x", name,
@@ -331,10 +333,11 @@ static const gal_profile *parse_trial_profile(void)
         gal_hook_logf("event=firmware.trial result=rejected reason=parse value=%s", v);
         return NULL;
     }
-    g_trial_profile = k_profiles[0];          /* settings fields */
-    (void)snprintf(g_trial_name, sizeof g_trial_name, "%s", name);
-    g_trial_profile.name = g_trial_name;
-    g_trial_profile.car_tested = 0;
+    memset(&g_trial_profile, 0, sizeof g_trial_profile);
+    (void)snprintf(g_trial_profile.name, sizeof g_trial_profile.name, "%s", name);
+    g_trial_profile.settings_first = 0x34u;
+    g_trial_profile.settings_last = 0x58u;
+    g_trial_profile.stock_displayable = 59u;
     g_trial_profile.controller_slot = f[0];
     g_trial_profile.impl_vtable = f[1];
     g_trial_profile.cbhandler_vtable = f[2];
@@ -387,8 +390,25 @@ static int verify_firmware_abi(void)
     cb_vtable_symbol = dlsym(RTLD_DEFAULT,
                              "_ZTVN3gal25CVideoSinkCallbackHandlerE");
 
-    for (i = 0u; i < GAL_PROFILE_COUNT; ++i) {
-        const gal_profile *p = &k_profiles[i];
+    {
+        static const char *const paths[] = {
+            "/eso/lib/gal_dualscreen/profiles.conf",
+            "/mnt/app/eso/lib/gal_dualscreen/profiles.conf",
+            "/fs/sda0/ClusterMap/profiles.conf",
+            "/fs/sdb0/ClusterMap/profiles.conf",
+        };
+        unsigned rejected = 0u, n;
+        for (n = 0u; n < sizeof paths / sizeof paths[0] && g_profile_count == 0u; ++n) {
+            g_profile_count = gal_hook_profile_load(paths[n], g_profiles, GAL_PROFILE_MAX, &rejected);
+            if (g_profile_count != 0u)
+                gal_hook_logf("event=firmware.profiles result=loaded path=%s profiles=%u rejected=%u",
+                              paths[n], g_profile_count, rejected);
+        }
+        if (g_profile_count == 0u)
+            gal_hook_logf("event=firmware.profiles result=missing action=leave_stock_gal_untouched");
+    }
+    for (i = 0u; i < g_profile_count; ++i) {
+        const gal_profile *p = &g_profiles[i];
         if ((uintptr_t)g_controller_instance_slot == p->controller_slot &&
             (uintptr_t)vtable_symbol == p->impl_vtable &&
             (uintptr_t)cb_vtable_symbol == p->cbhandler_vtable) {
@@ -414,7 +434,7 @@ static int verify_firmware_abi(void)
          */
         gal_hook_logf(
             "event=firmware.verify result=failed reason=no_profile profiles=%u fingerprint=controller:0x%08x,impl_vtable:0x%08x,cbhandler_vtable:0x%08x action=leave_stock_gal_untouched",
-            (unsigned)GAL_PROFILE_COUNT,
+            g_profile_count,
             (unsigned)(uintptr_t)g_controller_instance_slot,
             (unsigned)(uintptr_t)vtable_symbol,
             (unsigned)(uintptr_t)cb_vtable_symbol);
@@ -605,18 +625,31 @@ static void apply_video_config_insets(void *vconf, const gal_secondary_config *c
                                            ui_theme);
         /*
          * Too long for the string: used to send nothing at all, silently, so
-         * the phone fell back to the whole frame. Send every inset cut to
-         * 127 instead, which always fits, and say so.
+         * the phone fell back to the whole frame. Now cut the smallest value
+         * above 127 to 127 (one byte saved) and try again, one at a time
+         * until it fits: with theme 0 three values can stay above 127, with
+         * theme 1 or 2 (two more bytes) only one. All four at 127 always
+         * fits. Logged either way. (Upstream's refinement of this fork's
+         * first version, which cut all four at once.)
          */
         if (payload_len == 0u) {
-            gal_hook_logf("event=video.insets result=too_long tag=%s top=%u bottom=%u left=%u right=%u ui_theme=%u action=clamp_to_127",
+            uint32_t *v[4];
+            int i;
+            v[0] = &top; v[1] = &bottom; v[2] = &left; v[3] = &right;
+            gal_hook_logf("event=video.insets result=too_long tag=%s top=%u bottom=%u left=%u right=%u ui_theme=%u",
                           context_tag, top, bottom, left, right, ui_theme);
-            if (top > 127u) top = 127u;
-            if (bottom > 127u) bottom = 127u;
-            if (left > 127u) left = 127u;
-            if (right > 127u) right = 127u;
-            payload_len = build_insets_payload(payload, 15u, top, bottom, left, right,
-                                               ui_theme);
+            while (payload_len == 0u) {
+                uint32_t *least = NULL;
+                for (i = 0; i < 4; ++i) {
+                    if (*v[i] > 127u && (least == NULL || *v[i] < *least)) least = v[i];
+                }
+                if (least == NULL) break;
+                *least = 127u;
+                payload_len = build_insets_payload(payload, 15u, top, bottom, left, right,
+                                                   ui_theme);
+            }
+            gal_hook_logf("event=video.insets result=clamped tag=%s top=%u bottom=%u left=%u right=%u len=%zu",
+                          context_tag, top, bottom, left, right, payload_len);
         }
     }
 
@@ -2133,6 +2166,25 @@ static const void *iobuffer_bytes(const void *buffer, unsigned *out_bytes)
 }
 
 /*
+ * Shorten an inbound IoBuffer to its first n bytes, after the caller has
+ * written a smaller message over the start of it (nav_translate).
+ */
+static int iobuffer_set_length(const void *buffer, unsigned n)
+{
+    const void *io = NULL;
+    uint32_t offset, limit;
+
+    if (buffer == NULL) return 0;
+    memcpy(&io, (const unsigned char *)buffer + 4, sizeof(io));
+    if (io == NULL) return 0;
+    offset = load_u32(io, 8);
+    limit  = load_u32(io, 12);
+    if (limit < offset || n > limit - offset) return 0;
+    store_u32((void *)(uintptr_t)io, 12, offset + n);
+    return 1;
+}
+
+/*
  * Does the recovered payload actually start an H.264 access unit?
  *
  * encoded_payload() locates the payload by skipping `length` header bytes,
@@ -2621,6 +2673,69 @@ void _ZN13MessageRouter12routeMessageEhRK10shared_ptrI8IoBufferE(
             }
         }
     }
+    /*
+     * ...and translated into the old pair, so they are no longer lost
+     * (src/nav_translate.c). Only messages a 1.6+ phone sends are changed,
+     * so at the shipped 1.5 this does nothing. GAL_DUALSCREEN_NAV_TRANSLATE=0
+     * turns it off.
+     */
+    if (strstr(g_service_class[channel], "NavigationStatus") != NULL &&
+        (g_channel_last_id[channel] == 0x8003u || g_channel_last_id[channel] == 0x8006u ||
+         g_channel_last_id[channel] == 0x8007u)) {
+        static int translate = -1;
+        static unsigned long translated;
+        if (translate < 0) {
+            const char *v = getenv("GAL_DUALSCREEN_NAV_TRANSLATE");
+            translate = (v != NULL && (strcmp(v, "0") == 0 || strcmp(v, "false") == 0 ||
+                                       strcmp(v, "no") == 0)) ? 0 : 1;
+            gal_hook_logf("event=nav.translate enabled=%d", translate);
+        }
+        if (translate) {
+            unsigned nb = 0u;
+            unsigned char *m = (unsigned char *)(uintptr_t)iobuffer_bytes(buffer, &nb);
+            unsigned char out[256];
+            int n = m != NULL ? nav_translate(m, nb, out, sizeof out) : NAV_TRANSLATE_PASS;
+            const nav_translate_info *t = nav_translate_last();
+            if (n == NAV_TRANSLATE_DROP) {
+                if (translated < 10ul)
+                    gal_hook_logf("event=nav.translate from=0x%04x action=dropped reason=nothing_usable",
+                                  g_channel_last_id[channel]);
+                fc_run_mailbox();
+                return;
+            }
+            if (n > 0 && (unsigned)n <= nb) {
+                /*
+                 * Every change of manoeuvre, as the phone sent it: the road
+                 * tests are about one roundabout or "continue" step in a
+                 * drive, and the first dozen messages never reach it.
+                 */
+                if (t->to_id == 0x8004u) {
+                    static unsigned last_event = 0xffffffffu, last_side, last_road;
+                    static unsigned long changes;
+                    if ((t->event != last_event || t->side != last_side ||
+                         t->road_len != last_road) && changes < 200ul) {
+                        char hex[2 * 240 + 1];
+                        ++changes;
+                        hex_preview(m, nb < 240u ? nb : 240u, hex, sizeof hex);
+                        gal_hook_logf("event=nav.step n=%lu from=0x%04x event=%u side=%u road_len=%u bytes=%u hex=%s",
+                                      changes, t->from_id, t->event, t->side, t->road_len, nb, hex);
+                    }
+                    last_event = t->event;
+                    last_side = t->side;
+                    last_road = t->road_len;
+                }
+                if (iobuffer_set_length(buffer, (unsigned)n)) {
+                    memcpy(m, out, (size_t)n);
+                    g_channel_last_id[channel] = (unsigned short)t->to_id;
+                    ++translated;
+                    if (translated <= 10ul || translated % 200ul == 0ul)
+                        gal_hook_logf("event=nav.translate from=0x%04x to=0x%04x bytes=%u->%d event=%u side=%u road_len=%u meters=%u seconds=%u status=%d n=%lu",
+                                      t->from_id, t->to_id, nb, n, t->event, t->side,
+                                      t->road_len, t->meters, t->seconds, t->status, translated);
+                }
+            }
+        }
+    }
     if (count == 1ul) {
         const gal_secondary_config *config = gal_hook_config();
         const char *role = "other";
@@ -2958,6 +3073,36 @@ static void cluster_input_message(void *router, unsigned char channel, const voi
     }
 }
 
+/*
+ * GAL_PRIMARY_DPI: the density the main screen announces to the phone, in
+ * place of the firmware's own. Android Auto sizes its text and icons from it
+ * (lower: smaller, more on screen), as aawireless's DPI setting does, which
+ * its passthrough mode loses (#71). Unset, 0 or out of 60..400: stock value.
+ */
+static int primary_density(void *sink, int density)
+{
+    static int logged;
+    const char *value;
+    unsigned long want;
+
+    if (sink == NULL || sink == g_secondary_sink) return density;
+    value = getenv("GAL_PRIMARY_DPI");
+    if (value == NULL || value[0] == 0) return density;
+    want = strtoul(value, NULL, 10);
+    if (want < 60ul || want > 400ul) {
+        if (!logged) {
+            logged = 1;
+            gal_hook_logf("event=primary.dpi result=ignored value=%s stock=%d reason=range_60_400", value, density);
+        }
+        return density;
+    }
+    if (!logged) {
+        logged = 1;
+        gal_hook_logf("event=primary.dpi result=override stock=%d dpi=%lu", density, want);
+    }
+    return (int)want;
+}
+
 /* The older receiver's form; it is how the primary sink announces itself
  * there, exactly as the seven-int one does on P4521. */
 void _ZN9VideoSink25addSupportedConfigurationEiiiii(
@@ -2971,6 +3116,7 @@ void _ZN9VideoSink25addSupportedConfigurationEiiiii(
     gal_hook_debugf("event=video.config.add role=%s sink=%p resolution_enum=%d fps=%d margins=%dx%d dpi=%d form=5",
                     sink == g_secondary_sink ? "secondary" : "primary",
                     sink, resolution, fps, width_margin, height_margin, density);
+    density = primary_density(sink, density);
     g_add_configuration5(sink, resolution, fps, width_margin, height_margin, density);
 }
 
@@ -2992,6 +3138,7 @@ void _ZN9VideoSink25addSupportedConfigurationEiiiiiii(
                     sink == g_secondary_sink ? "secondary" : "primary",
                     sink, resolution, fps, width_margin, height_margin,
                     density, decoder_depth, pixel_aspect_ratio_e4);
+    density = primary_density(sink, density);
     g_add_configuration(sink, resolution, fps, width_margin, height_margin,
                         density, decoder_depth, pixel_aspect_ratio_e4);
 }

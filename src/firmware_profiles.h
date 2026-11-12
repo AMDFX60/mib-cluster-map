@@ -2,15 +2,17 @@
  * Firmware profiles.
  *
  * Everything in the hook that depends on one particular build of the stock
- * Android Auto program (gal) is collected here. To support another firmware,
- * add one entry to k_profiles[] below; nothing else in the hook needs to know.
+ * Android Auto program (gal) is data, in profiles.conf (config/profiles.conf
+ * here, /eso/lib/gal_dualscreen/profiles.conf on the unit). To support another
+ * firmware, add one line there; nothing else in the hook needs to know.
  *
  * How a profile is chosen
  *   The first three fields are the run-time addresses of three symbols that
  *   gal exports. They differ between builds, so together they identify the
  *   build. The hook resolves the symbols with dlsym and picks the entry whose
  *   three addresses all match. No match: the hook logs a fingerprint line with
- *   the three addresses it found and leaves Android Auto stock.
+ *   the three addresses it found and leaves Android Auto stock. tools/
+ *   profile_check.c makes the same comparison from the gal file at install.
  *
  * The one value that cannot be looked up
  *   `ctor` is the address of gal's CVideoSinkCallbackHandler constructor. It is
@@ -31,8 +33,12 @@
 
 #include <stdint.h>
 
+#define GAL_PROFILE_NAME_MAX 48
+#define GAL_PROFILE_MAX 64u
+#define GAL_PROFILE_MAX_ENTRY 64u
+
 typedef struct gal_profile {
-    const char *name;            /* firmware train, for the log */
+    char name[GAL_PROFILE_NAME_MAX]; /* firmware train, for the log */
     int car_tested;              /* 1 = has run on a car; 0 = derived only */
 
     /* --- build fingerprint: addresses of exported gal symbols ------------- */
@@ -60,63 +66,11 @@ typedef struct gal_profile {
     uint32_t stock_displayable;  /* that id; 59 on VW */
 } gal_profile;
 
-static const gal_profile k_profiles[] = {
-    /*
-     * VW Discover Pro 9.2", MIB2.5 High. gal sha256 f84722179cbf..., 1269211
-     * bytes; libautoreceiver.so sha256 b04cb5cf3b8c..., 1067402 bytes.
-     * Layouts verified in docs/Development.md ("Adding a firmware").
-     */
-    {
-        "MHI2_ER_VWG13_P4521", 1,
-        0x00237f70u, 0x00231e08u, 0x00231d18u,
-        0x001d9658u, 0xe92d4ff0u, 0xf0u,
-        0x94u, 0xc4u,
-        0x80u, 0x84u, 40u,
-        0x34u, 0x58u, 59u
-    },
-    /*
-     * SEAT MIB2.5 High, MU1447. Car-tested by lito69 with a 1010x376 cluster
-     * window (issue #4): trial selected, secondary sink registered, map drawn.
-     * The handler offsets are P4521's, which worked unchanged.
-     */
-    {
-        "MHI2_ER_SEG11_P4708", 1,
-        0x00237f68u, 0x00231e00u, 0x00231d10u,
-        0x001d9650u, 0xe92d4ff0u, 0xf0u,
-        0x94u, 0xc4u,
-        0x80u, 0x84u, 40u,
-        0x34u, 0x58u, 59u
-    },
-    /*
-     * SEAT MIB2.5 High, MU1447. Car-tested by DaniFR3 with its trial line
-     * (issue #4); handler offsets as P4521.
-     */
-    {
-        "MHI2_ER_SEG11_P4709", 1,
-        0x00238570u, 0x00232408u, 0x00232318u,
-        0x001d9ac0u, 0xe92d4ff0u, 0xf0u,
-        0x94u, 0xc4u,
-        0x80u, 0x84u, 40u,
-        0x34u, 0x58u, 59u
-    },
-    /*
-     * Skoda MIB2.5 High, MU1440. Car-tested by raskrivuska with its trial
-     * line (issue #15): the profile verified, the player decoded the phone's
-     * picture and the cockpit switched, with the map readable at DPI 125 and
-     * insets 40,127,127,127. Its receiver library is byte-identical to
-     * P4521's, so every verified layout applies; handler offsets as P4521.
-     */
-    {
-        "MHI2_ER_SKG13_P4526", 1,
-        0x002385c0u, 0x00232458u, 0x00232368u,
-        0x001d9ac0u, 0xe92d4ff0u, 0xf0u,
-        0x94u, 0xc4u,
-        0x80u, 0x84u, 40u,
-        0x34u, 0x58u, 59u
-    },
-};
+/* 1: a profile line, written to *out. 0: not a profile line. -1: malformed. */
+int gal_hook_profile_parse(const char *line, gal_profile *out);
 
-#define GAL_PROFILE_COUNT (sizeof(k_profiles) / sizeof(k_profiles[0]))
-#define GAL_PROFILE_MAX_ENTRY 64u
+/* Reads up to `max` profiles; *rejected counts lines that were left out. */
+unsigned gal_hook_profile_load(const char *path, gal_profile *table, unsigned max,
+                               unsigned *rejected);
 
 #endif

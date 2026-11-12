@@ -32,7 +32,7 @@ way back into the unit if the centre screen ever fails to start.
    ├── ClusterMap/      installer, programs, settings
    ├── Custom/          the menu screen, for route 2 via the toolbox
    ├── metainfo2.txt    makes the card a software update
-   └── _Swdlautorun.txt off; rename to start the update without the menu (below)
+   └── Swdlautorun.txt  starts the update by itself when the card goes in (below)
    ```
 3. Put it in **SD slot 1**, with slot 2 empty.
 
@@ -48,13 +48,14 @@ way back into the unit if the centre screen ever fails to start.
    restarts once more.
 4. Back at the home screen, hold the power button for ten seconds to reboot.
 
-**Without the service menu (for cars where it is hard to reach, such as an
-Audi without developer mode; tested on a VW Golf, untested on Audi):** rename
-`_Swdlautorun.txt`, at the top of the card, to `Swdlautorun.txt` and insert
-the card. Units that honour it start this update by themselves (the trigger
-M.I.B. uses); the Golf started it straight away. The update renames the file back, so it does not start again after the
-restart. If nothing happens within two minutes, the unit does not honour it:
-use the menu.
+**Autorun (on by default):** `Swdlautorun.txt`, at the top of the card, makes
+units that honour it start this update by themselves when the card goes in
+(the trigger M.I.B. uses; a Golf started it straight away, Audi untested).
+The update renames the file to `_Swdlautorun.txt` when it finishes, so it
+does not start again after the restart; installing on a second car means
+renaming it back first. If nothing happens within two minutes, the unit does
+not honour it: use the menu above. To keep the card from ever starting on
+its own, rename the file to `_Swdlautorun.txt` before inserting it.
 
 What it does, without asking:
 
@@ -77,7 +78,7 @@ the update, then move it back:
 | Marker | Folder | The update then |
 |---|---|---|
 | `UNINSTALL.txt` | `to uninstall, move this file up one folder` | removes everything and restores the original state |
-| `COLLECT.txt` | `to only check compatibility, move this file up one folder` | changes nothing: writes the status check to `update_result.txt` and collects the porting files. Only the menu screen file is copied to the unit |
+| `COLLECT.txt` | `to only check compatibility, move this file up one folder` | installs nothing: writes the status check to `update_result.txt` and collects the porting files. Only the menu screen file is copied to the unit |
 
 ## Route 2: green menu
 
@@ -146,9 +147,30 @@ while the phone sends it.
 | `/mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar` | the patch itself, when the installer adds it. The green menu's frame-rate switch replaces it with the 30 fps copy and back; an install keeps that choice, an uninstall puts the 20 fps jar back |
 | `/mnt/app/eso/hmi/engdefs/cluster-map.esd` | the menu screen |
 
-Uninstall puts all of it back, except that the engineering menu stays
-switched on, which is harmless. Run the status check afterwards: it should say
-the hook is not installed.
+Uninstall puts all of it back and removes the menu screen. Three things stay,
+all harmless: the engineering menu stays switched on, the unused backup copies
+of the files it edited stay beside them, and any fault the SD update logged
+stays (see [Fault B201A00](#fault-b201a00)). Run the status check before the
+reboot: it should say the hook is not installed. To use the green menu again
+later, run the update with `COLLECT.txt`.
+
+### Fault B201A00
+
+Any software update run from SD can log `B201A00 Check Software Version
+Management` in the head unit (5F), even when this package then installs
+nothing. One owner's scan shows it, with a sporadic `U10CF00`, at the minute of
+the SD update and before anything of this project ran (#10). Uninstalling does
+not clear it. It is the head unit reporting a software change; a workshop can
+clear it with a diagnostic tool's installation-change confirmation. Whether it
+has any other effect is not known.
+
+One owner cleared it themselves in 5F with the adaptation "Confirmation of
+installation change", using a key from a third-party tool (#10). We have not
+tried that route.
+
+If the update stops on another module, for example "device not responding"
+naming the instrument cluster, pressing Skip let the install finish on one car
+(#40).
 
 This fork has no CarPlay map. Packages before 1.1.3 installed one where the
 unit's CarPlay library fitted: an entry in CarPlay's start-up, its files in
@@ -166,10 +188,17 @@ the display manager (`dmdt gd`, window 33) and opens the player's window at
 it. Android Auto's cluster video is always 800×480, so where the window has
 another shape the phone is asked to leave margins (0×182 for 1010×376) and
 the player scales the rest to fill the window. If the size cannot be read, the card's `GAL_PLAYER_WINDOW`
-is used when set (for example `GAL_PLAYER_WINDOW=1010x376`), otherwise
-800×480. The install
+is used when set (this fork ships `GAL_PLAYER_WINDOW=1010x376`), otherwise the
+usual size for the make (1010×376 on SEAT and Skoda, 800×480 on VW and
+anything else). The install
 output and the unit's copy of the settings (`GAL_PLAYER_WINDOW`,
 `GAL_SECONDARY_MARGINS`) show what was chosen.
+
+The display manager only lists window 33 once the cockpit has shown it, so
+the installer can be left with a guess. The player therefore reads the size
+again each time it starts. If it differs, it opens the window at the real size
+and corrects the two settings for the next start. Until then the picture can
+have black bars.
 
 The margins cost sharpness: on 1010×376 only 298 of the frame's 480 lines
 carry map, enlarged to fill the window. `CLUSTERMAP_FULL_FRAME=1` asks the
@@ -186,21 +215,48 @@ unit's copy of the settings. A screen added before this version has no such
 entries: run route 1 once to update it. If the map looks stretched sideways,
 the phone ignored the ratio: switch it off again.
 
+Upstream has the same switch (off by default) but scales the insets
+differently: it first takes the band's margins (91 lines top and bottom on
+1010×376) off the top and bottom inset. This fork keeps its own rule, because
+every inset value it ships was tuned with it on the car; with upstream's rule
+the hidden turn card's `134,104` would leave a much taller space and the card
+would likely come back. The hook log says `rule=skoda` in its
+`event=config.full_frame` line.
+
 ## Settings
 
 Edit `ClusterMap/gal_dualscreen.conf` on the card, run the install again so
 the unit's copy is refreshed, and reboot. The file documents every key.
 
+**A line that starts with `#` is switched off.** Many settings ship that way.
+To use one, delete the `#` at the very start of the line, and keep only one
+active line per setting:
+
+```ini
+#GAL_PRIMARY_DPI=160    <- off: no effect, whatever the value
+GAL_PRIMARY_DPI=160     <- on
+```
+
+The same goes for any line you were asked to add, such as `GAL_PROFILE_TRIAL=`:
+it must start at the beginning of the line, with no `#` in front.
+
 | Setting | Shipped | Change it when |
 |---|---|---|
-| `GAL_SECONDARY_DPI` | 110 (this fork: smaller turn card on the Skoda) | map text and turn card too big (lower) or too small (higher) |
-| `GAL_SECONDARY_INSETS` | 134,104,0,0 (this fork: turn card hidden, see [Route 2: green menu](#route-2-green-menu)) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; a setting that does not fit is sent cut to 127 each. See the settings owners have settled on, below |
-| `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark |
-| `CLUSTERMAP_FULL_FRAME` | 1 (this fork) | 1 uses the whole frame on a cluster map window that is not 800×480: a little sharper, see [Cluster map window](#cluster-map-window). 0 goes back to the margins |
-| `GAL_DUALSCREEN_AAP_MINOR` | 5 | the Android Auto version the unit claims (1.x). At 6 or higher Google Maps sends navigation messages this unit cannot read, so the arrows jar shows no turn pictograms (#4). The map shows at 2 to 7. This fork's Skoda settings were car-tested at 7 and again at 5 (beta12, map and insets); go back to 7 if insets, theme or the sharper map stop working |
-| `GAL_PLAYER_WINDOW` | 1010x376 (this fork: Skoda) | used only when the installer says the cluster map window was "not reported by the display manager"; otherwise the reported size wins. Set it to your cluster's window if that is not 1010x376, or comment it out for 800×480 |
-| `CLUSTERMAP_KEEP_ARROWS` | 0 | 1 keeps the turn-arrows jar with the map (adds it if missing): map, arrows and music together on SEAT. On VW the map has gone blank when a route starts; one Tiguan `K4525` report says otherwise on beta8 (#44) |
-| `CLUSTERMAP_ADD_NAVIGNORE` | 0 | the map goes as soon as a route starts, on firmware where the installer does not add `NavActiveIgnore` by itself. 1 adds it, with a backup, and uninstall removes it. It edits the script that starts the centre screen, so check SSH works first |
+| `GAL_SECONDARY_DPI` | 110 (this fork: smaller turn card on the Skoda) | map text and turn card too big (lower) or too small (higher). Upstream ships `auto`, which the installer fills in per make (Skoda 125); a number here is kept as it is |
+| `GAL_PRIMARY_DPI` | unset (the unit's own) | Android Auto on the **centre screen** looks too large or too small. 60 to 400, the unit's own is usually 213; lower shows more. The same as aawireless's DPI setting, but kept in passthrough mode. Remove the `#` in front of the line. Car-tested upstream (#71), not yet on a Skoda |
+| `GAL_SECONDARY_INSETS` | 134,104,0,0 (this fork: turn card hidden, see [Route 2: green menu](#route-2-green-menu)) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; beyond that the smallest ones are cut to 127, one at a time, until the setting fits. See the settings owners have settled on, below |
+| `GAL_CROP_TOP`, `GAL_CROP_BOTTOM` | unset | you want a custom vertical crop of Android Auto's 800×480 frame instead of the margins. Nonzero values disable the installer's margins but keep its pixel-aspect setting (including `CLUSTERMAP_FULL_FRAME=1`); the player crops those rows and stretches the rest to the full window. From upstream (Audi A3, #85); not tried on a Skoda, where the sharper map does this job |
+| `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark. 1 or 2 costs two bytes of the insets message, so fewer insets can go above 127 |
+| `CLUSTERMAP_KEEP_SETTINGS` | unset (keep) | you want a clean install. Each install remembers the lines you changed in `gal_dualscreen.conf` and puts them back at the next install wherever the new card still has the shipped default; a line changed on the new card wins, and `update_result.txt` lists what was kept. When you install the same release again, a setting you have edited on the card since the last install is used as the card has it. `0` installs only the card's settings. Settings from releases before this mechanism (the fork's 1.1.x) are not carried over. The green-menu tests are not kept: they change only the unit's copy. The uninstall forgets them |
+| `CLUSTERMAP_FULL_FRAME` | 1 (this fork) | 1 uses the whole frame on a cluster map window wider than 800×480: a little sharper, see [Cluster map window](#cluster-map-window). 0 goes back to the margins |
+| `GAL_DUALSCREEN_AAP_MINOR` | 5 | the Android Auto version the unit claims (1.x). The map shows at 2 to 7. At 6 or higher Google Maps sends newer navigation messages this unit cannot read; the hook translates them into the old ones (`GAL_DUALSCREEN_NAV_TRANSLATE`, on), so the arrows jar should keep its turn pictograms; not yet car-tested above 5 (#4). This fork's Skoda settings were car-tested at 7 and again at 5 (beta12, map and insets); go back to 7 if insets, theme or the sharper map stop working |
+| `GAL_PLAYER_WINDOW` | 1010x376 (this fork: Skoda) | used only when the installer says the cluster map window was "not reported by the display manager"; otherwise the reported size wins. Set it to your cluster's window if that is not 1010x376 |
+| `GAL_VC_CONTEXT` | 70 | the cockpit map is in another display context. 70 on VW, SEAT and Skoda; Audi units differ (the installer sets them by itself) |
+| `CLUSTERMAP_KEEP_ARROWS` | 0 | 1 keeps the turn-arrows jar with the map (adds it if missing): map, arrows and music together on SEAT. Leave it at 0 on VW: the map has gone blank when a route starts, and a Golf `P4521` cockpit switched to its own arrow view after a few presses of OK and stayed there until the arrows were removed. One Tiguan `K4525` reports both working (#44). Not tested on a Skoda |
+| `CLUSTERMAP_MUSIC_INFO` | 0 | 1 shows the track playing (title, artist, cover) on the cockpit's media screen with the map: a music-only build of the arrows jar that sends no turn data, so the map stays up on a route. Only on trains where the arrows jar is known to work (`P4521`, `K4525`, `P4708`, `P4709`): on the Skoda `P4526` the installer ignores it. Ignored with `CLUSTERMAP_KEEP_ARROWS=1`. Not car-tested yet |
+| `CLUSTERMAP_TURN_INFO` | 0 | 1 sends Android Auto's turn info (arrow, distance) to the cockpit with the map: a build of the arrows jar that, unlike `CLUSTERMAP_KEEP_ARROWS=1`, never switches the cockpit to its arrow view, so the cockpit should draw its own arrow beside the map. Includes the track info of `CLUSTERMAP_MUSIC_INFO` and wins if both are set. Same trains (not the Skoda `P4526` yet); ignored with `CLUSTERMAP_KEEP_ARROWS=1`. Tested upstream on a Golf R `P4521`: map kept, arrow in the right dial, road name above the map |
+| `CLUSTERMAP_TURN_TEXT` | auto | with `CLUSTERMAP_TURN_INFO=1`, the road name shows twice with the map (the cockpit's line above Google's card). `auto` sends it only while the cockpit shows no map, `always` every time, `never` not at all (arrow and distance only). Not car-tested yet |
+| `CLUSTERMAP_ADD_NAVIGNORE` | 0 | the map goes as soon as a route starts, on firmware where the installer does not add `NavActiveIgnore` by itself (on the Skoda `P4526` it does). 1 adds it, with a backup, and uninstall removes it. It edits the script that starts the centre screen, so check SSH works first |
 | `GAL_PLAYER_DECODER` | sw | `sw` is the tested software decoder. `hw` uses the unit's own video decoder and frees most of a processor core. If it will not open, the player uses software; if it fails while decoding, it stays off until the next reboot. **Not yet car-tested** |
 | `GAL_PLAYER_PRIORITY` | 12 (this fork) | the player's priority, raised to this and never lowered (QNX's default is 10), so the compositor stalls the cockpit map less. 0 or no line leaves it as spawned; at most 20. The player log says `priority: 10 -> 12` |
 | `GAL_PLAYER_NVSS_OUTPUT` | 1 | the cluster stays black with `hw`: try 0 (uncomment the line first) |
@@ -210,19 +266,25 @@ the unit's copy is refreshed, and reboot. The file documents every key.
 
 The dials differ between cars, so these are starting points rather than
 recommendations. All are `GAL_SECONDARY_DPI` with `GAL_SECONDARY_INSETS` as
-top, bottom, left, right.
+top, bottom, left, right. This fork ships the hidden-card row for the Skoda as
+numbers. Upstream ships `auto`, and with `auto` in the file the installer
+picks the row marked *auto* for the make; to try another row, put its numbers
+in the file. Values that upstream owners tuned with the sharper map on use
+upstream's inset rule (see [Cluster map window](#cluster-map-window)), so they
+do not carry over one to one.
 
 | Cluster | DPI | Insets | From |
 |---|---|---|---|
-| SEAT 1010×376 (`P4708`, `P4709`) | 140 | `105,127,127,127` | SEAT owners, #4 |
+| SEAT 1010×376 (`P4708`, `P4709`), *auto* | 125 | `105,127,127,127` | SEAT owners, #4 and #19 (140 until beta11; owners found it too large) |
 | SEAT, for Waze | 110 | `105,127,127,127` | DaniFR3, #4 |
 | VW 12.3 in Passat B8 (`K4525`) | 145 | `56,73,127,127` | d4nt387, #8 |
 | VW 12.3 in Tiguan (`K4525`) | 145 | `56,120,127,127` | totocastellano-cmd, #27 |
-| Skoda 1010×376 (`P4526`) | 125 | `40,127,127,127` | raskrivuska, #15 |
-| Skoda 1010×376 (`P4526`), turn card hidden, sharper map | 110 | `134,104,0,0` | this fork, 1.1.2 |
+| Skoda 1010×376 (`P4526`), upstream's *auto* | 125 | `40,127,127,127` | raskrivuska, #15 (the card at the top; the green menu's top test) |
+| Skoda 1010×376 (`P4526`), turn card hidden, sharper map | 110 | `134,104,0,0` | this fork, 1.1.2 (shipped) |
 | VW 12.3 in, ETA card showing (`K4525`) | 138 | `52,82,127,127` | totocastellano-cmd, #20 and #12 (`53,83,127,127` on a second car: the same within a pixel) |
 | VW 12.3 in Passat B8 2019 (`K4525`), ETA card showing, with `GAL_SECONDARY_UI_THEME=0` | 138 | `56,73,127,127` | danielszyszko-ui, #41 |
-| VW Golf (`P4521`), ETA card showing, Google Maps and Waze | 138 | `52,82,127,127` | tvarszegi1, #8, road-tested |
+| VW Golf (`P4521`), ETA card showing, Google Maps and Waze, *auto* for VW | 138 | `52,82,127,127` | tvarszegi1, #8, road-tested |
+| VW Passat B8 2018 (`P4512_1`), small and large dials, *auto* for VW | 138 | `52,82,127,127` | slechtaadam-byte, #47 |
 
 Lower DPI makes the map and its text smaller, so more of the map shows; below
 about DPI 140 Google Maps changes from two overlay cards to one in the middle.
@@ -243,7 +305,7 @@ phone names and Bluetooth addresses.
 | The car's own map, or "no map" | Check the cluster is in map view. Unplug the phone, wait ten seconds, plug it in |
 | A wireless adapter connects, then drops every few seconds | In the adapter's own app: automatic standby **off**, VAG crash fix **off** (that fix is for VAG *Technisat* units, not Harman), adapter firmware up to date (#12, #35) |
 | The phone keeps disconnecting | Save logs, uninstall, reboot, open an issue |
-| The map appears, then goes blank when a route starts, or the cluster says "navigation on mobile device is active" | `NavActiveIgnore` is not loaded. The installer adds it on `P4521`, `K4525`, `P4512`, US `P3662`, Skoda `P4526` and SEAT `P4709`. On any other firmware set `CLUSTERMAP_ADD_NAVIGNORE=1` and install again, or apply it from the MIB2 Toolbox (**Customization > Navigation > Ignore navigation-active status**). Check SSH works first — see [Safety and recovery](#safety-and-recovery) |
+| The map appears, then goes blank when a route starts, or the cluster says "navigation on mobile device is active" | `NavActiveIgnore` is not loaded. The installer adds it on `P4521`, `K4525`, `P4512`, US `P3662`, Skoda `P4526`, SEAT `P4709` and the Audi A6/A7 C7.5 `K3663` (the Audi build). On any other firmware set `CLUSTERMAP_ADD_NAVIGNORE=1` and install again, or apply it from the MIB2 Toolbox (**Customization > Navigation > Ignore navigation-active status**). Check SSH works first — see [Safety and recovery](#safety-and-recovery) |
 | The map appears, then goes blank when a route starts, with `NavActiveIgnore` loaded | Run the install again: something re-enabled the turn-arrows jar |
 | Black cluster with `GAL_PLAYER_DECODER=hw` | `GAL_PLAYER_NVSS_OUTPUT=0`, or back to `sw` |
 | The centre screen stays black after a reboot | See below |
