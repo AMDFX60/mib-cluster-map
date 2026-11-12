@@ -48,7 +48,7 @@ Android Auto features. Upstream took the sharper map, the fix for insets above
 | Cockpit window (`GAL_PLAYER_WINDOW`) | Guessed from the make when the display manager does not list it | Also preset to **1010×376** |
 | Player priority (`GAL_PLAYER_PRIORITY`) | Unset (10) | **12**: a little higher, so the system's compositor holds up the cockpit map less |
 | CarPlay map | Installed where the unit's CarPlay library fits | **None**. This fork is Android Auto only; installing it removes a CarPlay map an older package added, and CarPlay itself stays stock |
-| Green menu | Status, logs, uninstall, sharper map, arrows switch | **Also** the 800×480 picture to compare, the turn card hidden, top right or top left, the map size and the cockpit frame rate ([below](#green-menu-switches)) |
+| Green menu | Status, logs, uninstall, sharper map, arrows switch | **Also** the 800×480 picture to compare, the turn card hidden, top right or top left, and the map size ([below](#green-menu-switches)) |
 | Building | Linux, macOS | **Also Windows**: Git Bash and Docker Desktop |
 
 Releases are named `mib-cluster-map_v1.1.2-skoda.zip`, test versions
@@ -130,8 +130,8 @@ up into `ClusterMap`, and run the same update again.
 
 ## Green menu switches
 
-Each changes only the unit's own copy of the settings (the frame rate: the
-unit's copy of `NavActiveIgnore.jar`) and takes effect after a reboot. The turn card settings are measured for the 1010×376 window at DPI 110; the next install keeps the one chosen here.
+Each changes only the unit's own copy of the settings and takes effect after
+a reboot. The turn card settings are measured for the 1010×376 window at DPI 110; the next install keeps the one chosen here.
 
 | Entry | What it does | On the Superb |
 |---|---|---|
@@ -139,9 +139,8 @@ unit's copy of `NavActiveIgnore.jar`) and takes effect after a reboot. The turn 
 | Test: 800x480 picture (to compare) | Upstream's 800×480 frame with margins, stretched to the window. The 720p entry goes back | For comparing sharpness and smoothness |
 | Turn card hidden (standard) | No green card: the car just below the middle, the arrival time in a line at the bottom (`75,163,320,320`) | Car-tested (beta12, 1.2.2-beta3) |
 | Turn card top right | The card in the top right corner with the arrival time under it, the car lower down (`100,138,320,320`) | Car-tested (1.2.2-beta4, where it was the standard by mistake). Maps sets the card's distance from the corner itself |
-| Turn card top left (a try) | The space moved right (`100,138,480,160`), so the free room is on the left; whether Maps then puts the card on the left is up to Maps. If it stays right, the car is just further right | Not tested yet |
+| Turn card top left | The space moved right (`100,138,480,160`), so the free room is on the left; whether Maps then puts the card on the left is up to Maps. If it stays right, the car is just further right | Not tested yet |
 | Test: map smaller / larger (DPI -10 / +10), Map size as installed | The map and its text smaller or larger, between DPI 80 and 170 | Not tested yet |
-| Test: cockpit map 30 fps mode / Cockpit map 20 fps mode (standard) | The unit sends the cockpit its map picture 30 instead of 20 times a second (stock firmware: 10), through a copy of `NavActiveIgnore.jar` that differs only in that number. The idea comes from [omonob/MHI2-Carplay-Maps](https://github.com/omonob/MHI2-Carplay-Maps) | Not tested yet |
 
 In beta12 the card sat above the car in the same space, so moving the space
 left or right moved the car and the whole view with it. With a short space
@@ -163,7 +162,8 @@ the corner instead, apart from the car.
 | Turn card top right | Car-tested (1.2.2-beta4) |
 | Turn card top left, map size | Not tested yet |
 | Turn-arrows jar beside the map (`CLUSTERMAP_KEEP_ARROWS=1`) | Not tested on a Skoda |
-| Cockpit map at 30 fps, player priority 12 (from 1.1.3) | Not tested yet |
+| Player priority 12 (from 1.1.3) | Not tested on its own |
+| Cockpit map at 30 fps (green-menu test, 1.1.3 to 1.2.2-beta5) | Removed untested: the unit sends the cockpit at most what the player draws, 9 to 10 pictures a second so far, and the link has a fixed bandwidth. An install or uninstall puts the 20 fps jar back if the unit still has the test's copy |
 | Upstream v1.2.1 base: installer, kept settings, player window check (from 1.2.2) | Not tested on the Superb yet; upstream's own releases run on many cars |
 | `GAL_PRIMARY_DPI`, `GAL_CROP_TOP/BOTTOM`, Android Auto 1.6/1.7 with the translation | Not tested on a Skoda (off by default) |
 | Turn arrow and music on the cockpit beside the map (`CLUSTERMAP_TURN_INFO`, `CLUSTERMAP_MUSIC_INFO`) | Not offered on `P4526`: the arrows jar is not known to work here yet |
@@ -194,7 +194,7 @@ covered.
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.2.2-beta5-skoda ./build_local.sh
+RELEASE_VERSION=v1.2.2-beta6-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
@@ -247,9 +247,6 @@ contain phone names and Bluetooth addresses.
 - **harman-f** (via [M.I.B.](https://github.com/Mr-MIBonk/M.I.B._More-Incredible-Bash)):
   the Audi build of `NavActiveIgnore.jar`, bundled unmodified under
   `thirdparty/navactiveignore-audi/` (GPL-2.0) for upstream's Audi support.
-- **omonob** ([MHI2-Carplay-Maps](https://github.com/omonob/MHI2-Carplay-Maps)):
-  the cockpit frame rate in `ChangeDataRateSequence`, the idea behind the
-  30 fps switch.
 - **Mr-MIBonk** ([M.I.B.](https://github.com/Mr-MIBonk/M.I.B._More-Incredible-Bash)):
   the `Swdlautorun.txt` trigger for installing without the service menu.
 - **lito69**, **tulio150** and **DaniFR3**: car tests and porting files for

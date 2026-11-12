@@ -9,9 +9,9 @@
 #   top_right  the same space 25 lines lower: Maps then shows the card in the
 #              top right corner with the arrival time under it, and the car
 #              lower down (car-tested, 1.2.2-beta4).
-#   top_left   a try: the space as for top_right but moved right, so the free
-#              room is on the left. Maps decides where its card goes; if it
-#              stays on the right, the car is just further right.
+#   top_left   the space as for top_right but moved right, so the free room is
+#              on the left. Maps decides where its card goes; if it stays on
+#              the right, the car is just further right (not car-tested yet).
 # The choice is written to the unit's own copy of the settings and takes
 # effect at the next reboot. The next install keeps it (CLUSTERMAP_TURN_CARD_
 # MENU), unless CLUSTERMAP_TURN_CARD on the card says otherwise than hidden.
@@ -30,7 +30,7 @@ MARK="# Turn card (chosen in the green menu; the next install keeps it)"
 case "$1" in
     hidden)    NEW=75,163,320,320;  WHAT="hidden" ;;
     top_right) NEW=100,138,320,320; WHAT="top right" ;;
-    top_left)  NEW=100,138,480,160; WHAT="top left (a try)" ;;
+    top_left)  NEW=100,138,480,160; WHAT="top left" ;;
     *) echo "usage: $0 hidden|top_right|top_left" >&2; exit 2 ;;
 esac
 

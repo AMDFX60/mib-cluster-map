@@ -1065,6 +1065,9 @@ else
             echo "         copy: cp $LSD_SH $LSD_SH.myback" >&2
         fi
     fi
+    # Skoda fork: the 30 fps cockpit test of 1.1.3 to 1.2.2-beta5 is gone; its
+    # copy of NavActiveIgnore.jar, if the unit still has it, goes back to 20.
+    navignore30_restore "$CARD_ROOT/thirdparty/NavActiveIgnore.jar"
     TBT_OK=0
     if train_has "$PROFILES" "$TRAIN" arrows; then TBT_OK=1; fi
     if [ "$WITH_ARROWS" -eq 1 ] && ! sh "$CARD_ROOT/lsd_jar.sh" loaded VCAndroidAuto.jar; then

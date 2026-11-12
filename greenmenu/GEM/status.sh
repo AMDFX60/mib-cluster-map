@@ -27,7 +27,7 @@ if [ -r "$UNIT_CONF" ]; then
     case "$p" in
         hidden)    p="hidden" ;;
         top_right) p="top right" ;;
-        top_left)  p="top left (a try)" ;;
+        top_left)  p="top left" ;;
         '')        p="set by the insets" ;;
     esac
     if [ -n "$pm" ]; then p="$p, chosen in this menu (kept by the next install)"; fi
@@ -50,7 +50,7 @@ if [ -r "$j" ] && sh "$PKG/lsd_jar.sh" loaded NavActiveIgnore.jar; then
     r=`wc -c < "$j" | sed 's/ //g'`
     case "$r" in
         "`wc -c < "$PKG/thirdparty/NavActiveIgnore.jar" 2>/dev/null | sed 's/ //g'`") echo "  cockpit map: 20 frames a second" ;;
-        "`wc -c < "$PKG/thirdparty/NavActiveIgnore30.jar" 2>/dev/null | sed 's/ //g'`") echo "  cockpit map: 30 frames a second (test)" ;;
+        27340) echo "  cockpit map: 30 frames a second (an old test; Install puts 20 back)" ;;
         *) echo "  cockpit map rate: not this package's jar ($r bytes)" ;;
     esac
 fi

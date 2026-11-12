@@ -40,6 +40,28 @@ app_mount_finish()
     fi
 }
 
+# navignore30_restore PACKAGE_JAR
+# Packages 1.1.3-beta1 to 1.2.2-beta5 of this fork had a green-menu test that
+# put a copy of NavActiveIgnore.jar sending the cockpit its map 30 instead of
+# 20 times a second over the unit's (27340 bytes; the toolbox's is 27179).
+# The test is gone, so where that copy is found the package's jar goes back.
+# Always returns 0: callers run under set -e.
+navignore30_restore()
+{
+    N30_JAR=/mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar
+    [ "`wc -c < "$N30_JAR" 2>/dev/null | sed 's/ //g'`" = 27340 ] || return 0
+    [ -r "$1" ] || return 0
+    if mount -uw /mnt/app 2>/dev/null && cp "$1" "$N30_JAR.new" 2>/dev/null &&
+       mv "$N30_JAR.new" "$N30_JAR" 2>/dev/null; then
+        echo "Put the 20 fps NavActiveIgnore.jar back (the 30 fps test is gone)."
+    else
+        rm -f "$N30_JAR.new" 2>/dev/null
+        echo "WARNING: could not put the 20 fps NavActiveIgnore.jar back." >&2
+    fi
+    mount -ur /mnt/app 2>/dev/null || true
+    return 0
+}
+
 # The firewall rule the CarPlay map of packages before 1.1.3 added: one pass
 # rule for TCP 6031 on carplay0 in each /mnt/system/etc/pf*.conf, marked so
 # that removal takes out only that line. This fork has no CarPlay map, so the

@@ -188,11 +188,9 @@ trap - 0 1 2 15
 # carry the same classes, and no later uninstall would find them.
 if [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
     echo
-    # The green menu's 30 fps test: the package's 20 fps jar back, before the
-    # line goes below or for an owner's own NavActiveIgnore line that stays.
-    if [ -r "$CARD_ROOT/scripts/map_rate.sh" ]; then
-        RATE_OUT=`sh "$CARD_ROOT/scripts/map_rate.sh" 20 2>&1` && echo "$RATE_OUT"
-    fi
+    # The 30 fps test of 1.1.3 to 1.2.2-beta5 is gone: its copy of the jar
+    # goes, before the line goes below or for an owner's own line that stays.
+    navignore30_restore "$CARD_ROOT/thirdparty/NavActiveIgnore.jar"
     if [ "${1:-}" != "--keep-jar-removed" ] && [ -f /mnt/app/eso/hmi/lsd/.aacluster_tbt_removed ]; then
         sh "$CARD_ROOT/turn_by_turn.sh" restore || \
             echo "WARNING: could not restore the turn-by-turn jar line; lsd.sh is unchanged." >&2

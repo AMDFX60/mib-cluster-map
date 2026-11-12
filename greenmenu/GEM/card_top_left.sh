@@ -2,7 +2,7 @@
 . "`dirname "$0"`/common.sh"
 # The turn card setting "top_left", in the unit's settings copy; the next
 # install keeps it (scripts/card_layout.sh).
-echo "Turn card top left (a try)"
+echo "Turn card top left"
 sh "$PKG/scripts/card_layout.sh" top_left
 RC=$?
 echo
