@@ -160,9 +160,46 @@ struct RGBABuffer {
     int cHeight;
     float chroma[4];
 
+    /*
+     * The decoded picture, handed over by reference (1.3.0). The decoder
+     * thread was the bottleneck at 720p (one full core), so it no longer
+     * copies: the render thread cuts the picture to the window into pixels
+     * just before the upload (takeFrame) and gives the buffer back. cropX/Y
+     * is where the window starts in the luma plane, cx0/cy0 in the chroma.
+     */
+    AVFrame* frame;
+    int cropX, cropY, cx0, cy0;
+
     RGBABuffer() : pixels(NULL), width(0), height(0), capacity(0), packetBytes(0), isKeyframe(false),
-                   colorFull(false), colorBt709(false), cWidth(0), cHeight(0) {
+                   colorFull(false), colorBt709(false), cWidth(0), cHeight(0),
+                   frame(NULL), cropX(0), cropY(0), cx0(0), cy0(0) {
         chroma[0] = chroma[1] = 1.0f; chroma[2] = chroma[3] = 0.0f;
+    }
+
+    bool hasFrame() const { return frame && frame->data[0]; }
+    void dropFrame() { if (frame) av_frame_unref(frame); }
+
+    /* Render thread: copy the window's part of the handed-over picture into
+     * pixels. False when there is none (a slot shown again, the start-up
+     * black frame). */
+    bool takeFrame() {
+        if (!hasFrame()) return false;
+        ensureCapacity(width, height, cWidth, cHeight);
+        if (!pixels) { dropFrame(); return false; }
+        uint8_t* dstY = pixels;
+        uint8_t* dstU = dstY + (size_t)width * height;
+        uint8_t* dstV = dstU + (size_t)cWidth * cHeight;
+        for (int y = 0; y < height; ++y)
+            memcpy(dstY + (size_t)y * width,
+                   frame->data[0] + (size_t)(y + cropY) * frame->linesize[0] + cropX, width);
+        for (int y = 0; y < cHeight; ++y)
+            memcpy(dstU + (size_t)y * cWidth,
+                   frame->data[1] + (size_t)(y + cy0) * frame->linesize[1] + cx0, cWidth);
+        for (int y = 0; y < cHeight; ++y)
+            memcpy(dstV + (size_t)y * cWidth,
+                   frame->data[2] + (size_t)(y + cy0) * frame->linesize[2] + cx0, cWidth);
+        dropFrame();
+        return true;
     }
 
     void ensureCapacity(int w, int h, int cw, int ch) {
@@ -195,7 +232,16 @@ struct FramePool {
         return &slots[writeSlot];
     }
 
+    /* The slot the decoder hands its next picture to (no copy, no
+     * allocation of pixels; the render thread does both). */
+    RGBABuffer* getHandoverBuffer() { return &slots[writeSlot]; }
+
+    /* All with g_frameMutex held. The decoder never writes readSlot, so the
+     * render thread copies and uploads that slot without the lock. */
     void publishWrite() {
+        /* A picture published but never shown is not going to be: give its
+         * buffer back to the decoder now. */
+        if (readySlot >= 0) slots[readySlot].dropFrame();
         readySlot = writeSlot;
         writeSlot = (writeSlot + 1) % kBufferPoolSize;
         if (writeSlot == readSlot) {
@@ -205,6 +251,7 @@ struct FramePool {
 
     RGBABuffer* getDisplayBuffer() {
         if (readySlot >= 0) {
+            if (readSlot >= 0 && readSlot != readySlot) slots[readSlot].dropFrame();
             readSlot = readySlot;
             readySlot = -1;
         }
@@ -1392,7 +1439,11 @@ static void* DecoderThreadFunc(void* arg) {
                             continue;
                         }
 
-                        // Direct memcpy to contiguous YUV buffer
+                        /*
+                         * Handed to the render thread by reference, which copies
+                         * it (RGBABuffer::takeFrame): this thread goes straight
+                         * on to the next picture.
+                         */
                         pthread_mutex_lock(&g_frameMutex);
                         /*
                          * 720p shown 1:1: only the window's part of the frame is
@@ -1402,7 +1453,6 @@ static void* DecoderThreadFunc(void* arg) {
                          * half the left margin, which on 135 columns is half a
                          * chroma sample off: the shader puts that back.
                          */
-                        uint64_t t_copy_start = now_us();
                         int cropX = 0, cropY = 0, outW = w, outH = h;
                         if (w == 1280 && h == 720 && g_pixelAspectE4 == 10000 &&
                             (g_marginW > 0 || g_marginH > 0) &&
@@ -1416,7 +1466,15 @@ static void* DecoderThreadFunc(void* arg) {
                         int cx0 = cropX / 2, cy0 = cropY / 2;
                         int cW = (cropX + outW + 1) / 2 - cx0;
                         int cH = (cropY + outH + 1) / 2 - cy0;
-                        RGBABuffer* buf = g_framePool.getWriteBuffer(outW, outH, cW, cH);
+                        RGBABuffer* buf = g_framePool.getHandoverBuffer();
+                        buf->width = outW;
+                        buf->height = outH;
+                        buf->cWidth = cW;
+                        buf->cHeight = cH;
+                        buf->cropX = cropX;
+                        buf->cropY = cropY;
+                        buf->cx0 = cx0;
+                        buf->cy0 = cy0;
                         buf->chroma[0] = (float)outW / (float)(2 * cW);
                         buf->chroma[1] = (float)outH / (float)(2 * cH);
                         buf->chroma[2] = (float)(cropX - 2 * cx0) / (float)(2 * cW);
@@ -1443,38 +1501,21 @@ static void* DecoderThreadFunc(void* arg) {
                                                      (buf->colorBt709 ? "limited-range BT.709" : "limited-range BT.601"));
                             }
                         }
-                        
-                        uint8_t* dstY = buf->pixels;
-                        uint8_t* dstU = dstY + (outW * outH);
-                        uint8_t* dstV = dstU + (cW * cH);
 
-                        // Copy Y plane
-                        for (int y = 0; y < outH; ++y) {
-                            memcpy(dstY + y * outW,
-                                   frame->data[0] + (y + cropY) * frame->linesize[0] + cropX, outW);
+                        if (!buf->frame) buf->frame = av_frame_alloc();
+                        if (!buf->frame) {
+                            pthread_mutex_unlock(&g_frameMutex);
+                            av_frame_unref(frame);
+                            continue;
                         }
-                        if ((g_decodedFrameCount & 31u) == 0) {
-                            uint64_t sum = 0, count = 0;
-                            for (int y = 8; y < outH; y += 16)
-                                for (int x = 8; x < outW; x += 16, ++count) sum += dstY[y * outW + x];
-                            g_lastLuma = count ? (unsigned)(sum / count) : 0u;
-                        }
-                        // Copy U plane
-                        for (int y = 0; y < cH; ++y) {
-                            memcpy(dstU + y * cW, frame->data[1] + (y + cy0) * frame->linesize[1] + cx0, cW);
-                        }
-                        // Copy V plane
-                        for (int y = 0; y < cH; ++y) {
-                            memcpy(dstV + y * cW, frame->data[2] + (y + cy0) * frame->linesize[2] + cx0, cW);
-                        }
-
+                        buf->dropFrame();
+                        av_frame_move_ref(buf->frame, frame);
                         g_framePool.publishWrite();
                         g_newFrameReady = true;
                         g_decodedFrameCount++;
                         g_lastDecodeDurationUs = dec_dur;
                         g_tDecodeUs += (uint32_t)dec_dur;
                         if ((uint32_t)dec_dur > g_tDecodeMaxUs) g_tDecodeMaxUs = (uint32_t)dec_dur;
-                        g_tCopyUs += (uint32_t)(now_us() - t_copy_start);
 
                         pthread_cond_signal(&g_frameCond);
                         pthread_mutex_unlock(&g_frameMutex);
@@ -2174,7 +2215,13 @@ int main(int argc, char* argv[]) {
         uint64_t frameStartUs = now_us();
 
         RGBABuffer* dispBuf = g_framePool.getDisplayBuffer();
-        if (dispBuf && dispBuf->pixels) {
+        /*
+         * The decoder never writes the slot being shown (publishWrite skips
+         * readSlot), so the copy and upload below run without the lock and
+         * the decoder can hand over its next picture meanwhile.
+         */
+        pthread_mutex_unlock(&g_frameMutex);
+        if (dispBuf && (dispBuf->pixels || dispBuf->hasFrame())) {
             static uint64_t s_lastRenderUs = 0;
             bool isIdle = (g_idleMaxBytes > 0 && dispBuf->packetBytes > 0 &&
                            dispBuf->packetBytes <= g_idleMaxBytes && !dispBuf->isKeyframe);
@@ -2183,10 +2230,25 @@ int main(int argc, char* argv[]) {
 
             // Idle render bypass: when stationary, only render on heartbeat keepalive (~333ms at 3Hz)
             if (isIdle && heartbeatIntervalUs > 0 && s_lastRenderUs > 0 && timeSinceRenderUs < heartbeatIntervalUs) {
-                pthread_mutex_unlock(&g_frameMutex);
                 continue; // Skip texture upload & swap; previous surface stays presented cleanly
             }
             s_lastRenderUs = frameStartUs;
+
+            /* Cut the decoder's picture to the window (it handed it over by
+             * reference) and take a brightness sample now and then. */
+            uint64_t t_copy_start = now_us();
+            if (dispBuf->takeFrame()) {
+                if ((g_drawnCount & 31u) == 0) {
+                    const uint8_t* lumaY = dispBuf->pixels;
+                    int lw = dispBuf->width, lh = dispBuf->height;
+                    uint64_t sum = 0, count = 0;
+                    for (int y = 8; y < lh; y += 16)
+                        for (int x = 8; x < lw; x += 16, ++count) sum += lumaY[(size_t)y * lw + x];
+                    g_lastLuma = count ? (unsigned)(sum / count) : 0u;
+                }
+                g_tCopyUs += (uint32_t)(now_us() - t_copy_start);
+            }
+            if (!dispBuf->pixels) continue;
 
             int w = dispBuf->width;
             int h = dispBuf->height;
@@ -2247,8 +2309,6 @@ int main(int argc, char* argv[]) {
             uint64_t t_draw_start = now_us();
             g_tUploadUs += (uint32_t)(t_draw_start - t_upload_start);
 
-            pthread_mutex_unlock(&g_frameMutex);
-
             // Render to screen (GPU YUV Shader)
             glViewport(0, 0, windowWidth, windowHeight);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -2294,8 +2354,8 @@ int main(int argc, char* argv[]) {
             {
                 uint64_t t_end = now_us();
                 g_tDrawUs += (uint32_t)(t_end - t_draw_start);
-                if ((uint32_t)(t_end - t_upload_start) > g_tFrameMaxUs)
-                    g_tFrameMaxUs = (uint32_t)(t_end - t_upload_start);
+                if ((uint32_t)(t_end - t_copy_start) > g_tFrameMaxUs)
+                    g_tFrameMaxUs = (uint32_t)(t_end - t_copy_start);
                 g_drawnCount++;
             }
 #else
@@ -2338,8 +2398,6 @@ int main(int argc, char* argv[]) {
             glfwPollEvents();
             write_ack();
 #endif
-        } else {
-            pthread_mutex_unlock(&g_frameMutex);
         }
 
         frameCount++;
@@ -2382,7 +2440,7 @@ int main(int argc, char* argv[]) {
                     decoded, (double)decoded * 1e6 / minuteUs, drawn, g_lastLuma, T_ARGS(frameEndUs));
                 LOG("timing: per picture decode %.1f ms (max %.1f), copy %.1f ms, upload %.1f ms, draw+swap %.1f ms; slowest shown %.1f ms; player CPU %.0f%% of one core",
                     decoded ? dDec / 1000.0 / decoded : 0.0, g_tDecodeMaxUs / 1000.0,
-                    decoded ? dCopy / 1000.0 / decoded : 0.0,
+                    drawn ? dCopy / 1000.0 / drawn : 0.0,
                     drawn ? dUp / 1000.0 / drawn : 0.0, drawn ? dDraw / 1000.0 / drawn : 0.0,
                     g_tFrameMaxUs / 1000.0, cpuUs * 100.0 / minuteUs);
                 g_tDecodeMaxUs = 0;

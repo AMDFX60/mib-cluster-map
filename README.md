@@ -3,10 +3,13 @@
 **Android Auto on the Skoda Virtual Cockpit:** the live Google Maps or Waze
 map from your phone, sharp and without the green turn card in the way.
 
-![The cluster map on a Skoda Superb's Virtual Cockpit, the standard view: no turn card, the car just below the middle, the arrival time at the bottom](docs/images/cockpit-default.jpg)
+![The cluster map on a Skoda Superb's Virtual Cockpit at night: Google Maps with 3D buildings, no turn card, the arrival time at the bottom](docs/images/cockpit-night.jpg)
 
-*The standard view on a Superb: no turn card, the car just below the middle,
-the arrival time in a line at the bottom. Street names blurred.*
+![The cluster map on a Skoda Superb's Virtual Cockpit by day: a route in Google Maps, no turn card, the arrival time at the bottom](docs/images/cockpit-day.jpg)
+
+*The standard view on a Superb, at night and by day: no turn card, the car
+just below the middle, the arrival time in a line at the bottom. Street names
+blurred.*
 
 For Skoda cars with the Harman **MIB2.5 High** head unit (firmware train
 `MHI2_ER_SKG13_`) and the Virtual Cockpit. **Android Auto only**: no CarPlay.
@@ -39,6 +42,8 @@ for the Skoda cockpit.
   view like its own navigation.
 - **Sharp 720p picture, 1:1.** The phone draws exactly the cockpit window's
   1010×376 pixels, and they are shown without any stretching or scaling.
+- **Smooth.** Decoded with the Tegra 3's NEON unit: 17 to 28 pictures a
+  second in the car (the phone sends at most 30).
 - **True colours.** The picture is converted the way the phone sends it, with
   deep blacks and full contrast.
 - **Turn card your way.** Hidden by default, so the map is free and the
@@ -55,16 +60,7 @@ for the Skoda cockpit.
 
 ## Changelog
 
-### 1.3.0-beta3
-
-- **Fix:** with beta1 and beta2 the cockpit kept the car's own map. The player
-  crashed at every start: one of FFmpeg's NEON routines stores 4 bytes at an
-  address the head unit's QNX kernel does not allow (misaligned), which
-  Linux and Android do. The few NEON routines that do so now use FFmpeg's C
-  code; all others stay. Should the player still crash, it decodes without
-  NEON until the next reboot by itself.
-
-### 1.3.0-beta2: compared with 1.2
+### 1.3.0 (compared with 1.2)
 
 - **720p picture shown 1:1.** The phone sends 1280×720 with margins that
   leave exactly the cockpit window, instead of 800×480 stretched to 1010
@@ -73,10 +69,16 @@ for the Skoda cockpit.
 - **Correct colours.** The phone sends limited-range BT.709; the player took
   it as full range, so blacks were grey and the map pale. Now deeper blacks
   and more contrast.
-- **Smoother, with NEON.** The player's H.264 decoder now uses the Tegra 3's
-  NEON routines. Without them a 720p picture took about 100 ms to decode,
-  which held the map to 9 to 10 pictures a second; NEON is usually two to
-  three times faster. Not yet measured in the car.
+- **About twice as smooth.** The player's H.264 decoder uses the Tegra 3's
+  NEON unit: a 720p picture takes 28 to 53 ms to decode instead of about
+  100 ms, so the cockpit shows 17 to 28 pictures a second instead of 9 to 10
+  (measured in the car). The few NEON routines that access memory in a way
+  the head unit's QNX kernel does not allow use FFmpeg's C code instead.
+  Should the player still crash, it decodes without NEON until the next
+  reboot by itself (`GAL_PLAYER_NEON=0` does the same on purpose).
+- The decoder hands each picture over without copying it, and the drawing
+  side copies it, so the decoder can start the next one sooner (about 10 %
+  more pictures when the map moves a lot; not yet measured in the car).
 - **Turn card setting:** hidden (standard), top right or top left, from the
   green menu or `CLUSTERMAP_TURN_CARD`; the next install keeps it.
 - **Simpler green menu:** the sharper-map switch, the picture switch, the
@@ -84,10 +86,7 @@ for the Skoda cockpit.
 - The player logs once a minute how many pictures it shows and how long each
   step takes.
 
-beta2 is beta1 without the green menu's picture switch (the 800×480
-comparison).
-
-### 1.2 (test versions 1.2.2-beta1 and beta2)
+### 1.2
 
 - Based on upstream **v1.2.1**: the installer checks the unit's Android Auto
   program before it changes anything, reports missing tools first, and has
@@ -166,8 +165,9 @@ to the card's settings when you install again.
 |---|---|
 | Install by software update, green menu | Car-tested |
 | Android Auto map, with and without a route; automatic day/night | Car-tested |
-| 720p picture 1:1, colours | Car-tested (1.2.2-beta3 and beta4): sharper; 9 to 10 pictures a second before NEON |
-| NEON decoder (smoothness) | beta1 and beta2 crashed (map stayed on the car's own); fixed in beta3, not yet measured in the car |
+| 720p picture 1:1, colours | Car-tested: sharper |
+| NEON decoder (smoothness) | Car-tested: 17 to 28 pictures a second instead of 9 to 10 |
+| Picture handover without a copy in the decoder (1.3.0) | Not yet car-tested |
 | Turn card hidden, top right | Car-tested |
 | Turn card top left, keeping the choice across installs | Not yet car-tested |
 | Map size switch | Not yet car-tested |
@@ -209,13 +209,13 @@ All settings are in the [Install guide](docs/Install.md#settings).
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.3.0-beta3-skoda ./build_local.sh
+RELEASE_VERSION=v1.3.0-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
 replaces the green menu only for a higher version number, which
 `RELEASE_VERSION` gives: `X.Y.Z-betaN` counts as X·10000 + Y·1000 + Z·100 + N
-and a release as N = 99 (`v1.2.2-beta6` is 12206, `v1.3.0-beta3` 13003),
+and a release as N = 99 (`v1.3.0-beta3` is 13003, `v1.3.0` 13099),
 whatever follows (`-skoda`). The first run builds FFmpeg with NEON once.
 Details are in [Development](docs/Development.md) and at the top of
 `build_local.sh`.
