@@ -408,6 +408,9 @@ static GLuint g_texV = 0;
  * previous conversion, to compare.
  */
 static bool g_colorAuto = true;
+/* GAL_PLAYER_NEON (default 1) and the crash marker that turns NEON off. */
+static bool g_neonAllowed = true;
+static const char* kNoNeonMarker = "/tmp/clustermap-player-noneon";
 
 // Standard GLES2 RGBA Shaders (Proven 100% compatible with Tegra 3)
 static const char* vertexShaderSource =
@@ -778,6 +781,17 @@ static void write_ack();
 
 static void crash_signal_handler(int sig) {
     fprintf(stderr, "\n[stream-player CRASH] Caught fatal signal %d! Emergency restoring the stock cluster map...\n", sig);
+    /* Skoda fork: the next start, until reboot, decodes without NEON (main). */
+    if (sig == SIGBUS || sig == SIGILL || sig == SIGSEGV) {
+        int fd = open(kNoNeonMarker, O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (fd >= 0) {
+            static const char msg[] = "the player crashed; NEON off until reboot\n";
+            ssize_t w = write(fd, msg, sizeof msg - 1);
+            (void)w;
+            close(fd);
+        }
+        fprintf(stderr, "[stream-player CRASH] next start decodes without NEON (%s)\n", kNoNeonMarker);
+    }
 #ifdef __QNX__
     if (g_dmdtCrashCmd[0]) system(g_dmdtCrashCmd);
 #endif
@@ -1667,6 +1681,9 @@ static void load_player_config() {
                 /* Wide enough for any window of 320..1920 by 160..1080. */
                 int e4 = atoi(val);
                 if (e4 >= 1000 && e4 <= 80000) g_pixelAspectE4 = e4;
+            } else if (strcmp(key, "GAL_PLAYER_NEON") == 0) {
+                /* 0: decode without NEON; anything else: NEON where the CPU has it. */
+                g_neonAllowed = atoi(val) != 0;
             } else if (strcmp(key, "GAL_PLAYER_COLOR") == 0) {
                 /* auto (default): as the stream says; old: full-range BT.601 as before. */
                 if (strcmp(val, "old") == 0) g_colorAuto = false;
@@ -1900,13 +1917,27 @@ int main(int argc, char* argv[]) {
      * QNX at run time, so the system page is asked here; without NEON its
      * NEON routines are switched off rather than run.
      */
+    /*
+     * This unit's kernel faults misaligned NEON accesses (SIGBUS), where Linux
+     * and Android allow them: 1.3.0-beta2 crashed at every start in
+     * ff_h264_h_loop_filter_luma_neon, which stores 4 bytes at pix-2. Those
+     * routines are left out of the build (tools/ffmpeg_qnx_aligned.sh). Should
+     * another one still fault, the crash handler leaves kNoNeonMarker in /tmp
+     * and every later start until the next reboot decodes without NEON, as
+     * 1.2.2-beta4 did. GAL_PLAYER_NEON=0 switches NEON off for good.
+     */
     {
         unsigned cpuFlags = SYSPAGE_ENTRY(cpuinfo)->flags;
-        if (cpuFlags & ARM_CPU_FLAG_NEON) {
-            LOG("cpu: NEON present (flags 0x%x); FFmpeg uses its NEON decoder routines", cpuFlags);
-        } else {
+        const char* off = NULL;
+        if (!(cpuFlags & ARM_CPU_FLAG_NEON)) off = "the CPU reports no NEON";
+        else if (!g_neonAllowed) off = "GAL_PLAYER_NEON=0";
+        else if (access(kNoNeonMarker, F_OK) == 0)
+            off = "an earlier start since the last reboot crashed (" "/tmp/clustermap-player-noneon" ")";
+        if (off) {
             av_force_cpu_flags(av_get_cpu_flags() & ~AV_CPU_FLAG_NEON);
-            LOGE("cpu: no NEON reported (flags 0x%x); FFmpeg's NEON routines switched off", cpuFlags);
+            LOG("cpu: NEON off: %s (flags 0x%x); FFmpeg decodes with its C routines", off, cpuFlags);
+        } else {
+            LOG("cpu: NEON present (flags 0x%x); FFmpeg uses its NEON decoder routines", cpuFlags);
         }
     }
 #endif

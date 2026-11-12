@@ -55,6 +55,15 @@ for the Skoda cockpit.
 
 ## Changelog
 
+### 1.3.0-beta3
+
+- **Fix:** with beta1 and beta2 the cockpit kept the car's own map. The player
+  crashed at every start: one of FFmpeg's NEON routines stores 4 bytes at an
+  address the head unit's QNX kernel does not allow (misaligned), which
+  Linux and Android do. The few NEON routines that do so now use FFmpeg's C
+  code; all others stay. Should the player still crash, it decodes without
+  NEON until the next reboot by itself.
+
 ### 1.3.0-beta2: compared with 1.2
 
 - **720p picture shown 1:1.** The phone sends 1280×720 with margins that
@@ -158,7 +167,7 @@ to the card's settings when you install again.
 | Install by software update, green menu | Car-tested |
 | Android Auto map, with and without a route; automatic day/night | Car-tested |
 | 720p picture 1:1, colours | Car-tested (1.2.2-beta3 and beta4): sharper; 9 to 10 pictures a second before NEON |
-| NEON decoder (smoothness) | New in 1.3.0, not yet measured in the car |
+| NEON decoder (smoothness) | beta1 and beta2 crashed (map stayed on the car's own); fixed in beta3, not yet measured in the car |
 | Turn card hidden, top right | Car-tested |
 | Turn card top left, keeping the choice across installs | Not yet car-tested |
 | Map size switch | Not yet car-tested |
@@ -191,6 +200,7 @@ needs editing. The ones this fork adds:
 | `CLUSTERMAP_TURN_CARD` | hidden | `top_right` or `top_left` |
 | `GAL_SECONDARY_DPI` | 110 | lower draws the map, its text and the card smaller |
 | `GAL_PLAYER_COLOR` | auto | `old` for the colours before 1.3 |
+| `GAL_PLAYER_NEON` | 1 | 0 decodes without NEON (slower) |
 
 All settings are in the [Install guide](docs/Install.md#settings).
 
@@ -199,13 +209,13 @@ All settings are in the [Install guide](docs/Install.md#settings).
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.3.0-beta2-skoda ./build_local.sh
+RELEASE_VERSION=v1.3.0-beta3-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
 replaces the green menu only for a higher version number, which
 `RELEASE_VERSION` gives: `X.Y.Z-betaN` counts as X·10000 + Y·1000 + Z·100 + N
-and a release as N = 99 (`v1.2.2-beta6` is 12206, `v1.3.0-beta2` 13002),
+and a release as N = 99 (`v1.2.2-beta6` is 12206, `v1.3.0-beta3` 13003),
 whatever follows (`-skoda`). The first run builds FFmpeg with NEON once.
 Details are in [Development](docs/Development.md) and at the top of
 `build_local.sh`.

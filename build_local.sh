@@ -102,7 +102,11 @@ build_player() {
     # software decoder took about 100 ms a 720p picture without it. A build
     # made with other settings (the stamp differs) is made again from the same
     # source. tools/qnx_cc.sh forces stddef.h into C files only.
-    FFCONF=neon-cortex-a9-2
+    # The QNX kernel of the unit faults misaligned accesses (1.3.0-beta2 crashed in
+    # a NEON loop filter), so tools/ffmpeg_qnx_aligned.sh leaves out the NEON
+    # routines that make them, and neither FFmpeg (--disable-fast-unaligned)
+    # nor the compiler (-mno-unaligned-access) may make them in C.
+    FFCONF=neon-cortex-a9-aligned-4
     if [ ! -f $FF/libavcodec/libavcodec.a ] || [ "$(cat $FF/.mibcm-ffconf 2>/dev/null)" != "$FFCONF" ]; then
       if [ ! -f $FF/configure ]; then
         cd /work/build
@@ -114,13 +118,15 @@ build_player() {
       fi
       cd $FF
       cp /work/tools/qnx_cc.sh $FF/qnx_cc.sh && chmod 755 $FF/qnx_cc.sh
+      sh /work/tools/ffmpeg_qnx_aligned.sh $FF
       ./configure --cc=$FF/qnx_cc.sh --as=$FF/qnx_cc.sh --ar=$P-ar --ld=$P-gcc --nm=$P-nm --ranlib=$P-ranlib --strip=$P-strip \
-        --arch=arm --cpu=cortex-a9 --target-os=qnx --enable-neon --disable-debug --enable-cross-compile \
-        --extra-cflags="-D_QNX_SOURCE -mfloat-abi=softfp -mfpu=neon" \
+        --arch=arm --cpu=cortex-a9 --target-os=qnx --enable-neon --disable-fast-unaligned --disable-debug --enable-cross-compile \
+        --extra-cflags="-D_QNX_SOURCE -mfloat-abi=softfp -mfpu=neon -mno-unaligned-access" \
         --extra-libs=-lsocket --disable-doc --disable-programs --disable-avdevice --disable-swresample \
         --disable-swscale --disable-postproc --disable-avfilter --disable-everything \
         --enable-decoder=h264 --enable-parser=h264
-      grep -q "^NEON enabled *yes" ffbuild/config.log 2>/dev/null || grep -q "HAVE_NEON 1" config.h || { echo "REJECTED: FFmpeg configured without NEON"; exit 1; }
+      grep -q "HAVE_NEON 1" config.h || { echo "REJECTED: FFmpeg configured without NEON"; exit 1; }
+      grep -q "HAVE_FAST_UNALIGNED 0" config.h || { echo "REJECTED: FFmpeg configured with fast unaligned access"; exit 1; }
       make -j"$(nproc)"
       echo "$FFCONF" > $FF/.mibcm-ffconf
     fi
