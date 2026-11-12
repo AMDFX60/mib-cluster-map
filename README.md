@@ -55,7 +55,7 @@ for the Skoda cockpit.
 
 ## Changelog
 
-### 1.3.0-beta1: compared with 1.2
+### 1.3.0-beta2: compared with 1.2
 
 - **720p picture shown 1:1.** The phone sends 1280×720 with margins that
   leave exactly the cockpit window, instead of 800×480 stretched to 1010
@@ -74,6 +74,9 @@ for the Skoda cockpit.
   30 fps cockpit test and the turn card tests are gone.
 - The player logs once a minute how many pictures it shows and how long each
   step takes.
+
+beta2 is beta1 without the green menu's picture switch (the 800×480
+comparison).
 
 ### 1.2 (test versions 1.2.2-beta1 and beta2)
 
@@ -155,7 +158,7 @@ to the card's settings when you install again.
 | Install by software update, green menu | Car-tested |
 | Android Auto map, with and without a route; automatic day/night | Car-tested |
 | 720p picture 1:1, colours | Car-tested (1.2.2-beta3 and beta4): sharper; 9 to 10 pictures a second before NEON |
-| NEON decoder (smoothness) | New in 1.3.0-beta1, not yet measured in the car |
+| NEON decoder (smoothness) | New in 1.3.0, not yet measured in the car |
 | Turn card hidden, top right | Car-tested |
 | Turn card top left, keeping the choice across installs | Not yet car-tested |
 | Map size switch | Not yet car-tested |
@@ -196,13 +199,13 @@ All settings are in the [Install guide](docs/Install.md#settings).
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.3.0-beta1-skoda ./build_local.sh
+RELEASE_VERSION=v1.3.0-beta2-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
 replaces the green menu only for a higher version number, which
 `RELEASE_VERSION` gives: `X.Y.Z-betaN` counts as X·10000 + Y·1000 + Z·100 + N
-and a release as N = 99 (`v1.2.2-beta6` is 12206, `v1.3.0-beta1` 13001),
+and a release as N = 99 (`v1.2.2-beta6` is 12206, `v1.3.0-beta2` 13002),
 whatever follows (`-skoda`). The first run builds FFmpeg with NEON once.
 Details are in [Development](docs/Development.md) and at the top of
 `build_local.sh`.
