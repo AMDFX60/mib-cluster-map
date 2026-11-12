@@ -1,8 +1,9 @@
 #!/bin/sh
 . "`dirname "$0"`/common.sh"
-# The turn card at the bottom of the cluster map (test), in the unit's settings copy.
-echo "Test: show the turn card at the bottom"
-sh "$PKG/scripts/card_layout.sh" bottom
+# The turn card setting "top_left", in the unit's settings copy; the next
+# install keeps it (scripts/card_layout.sh).
+echo "Turn card top left (a try)"
+sh "$PKG/scripts/card_layout.sh" top_left
 RC=$?
 echo
 if [ $RC -eq 0 ]; then

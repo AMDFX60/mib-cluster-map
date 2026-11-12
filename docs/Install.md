@@ -99,10 +99,9 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | Uninstall and restore original state | Full revert |
 | Test: 800x480 picture (to compare), then reboot | Sets `CLUSTERMAP_720P=0` in the unit's copy: upstream's 800×480 frame with margins, stretched to the window, to compare sharpness and smoothness with 720p. An install from the card writes the card's setting again |
 | 720p picture 1:1 (standard), then reboot | Sets `CLUSTERMAP_720P=1` in the unit's copy: the phone is asked for a 1280×720 frame with margins that leave exactly the cockpit window, and the player shows it 1:1; see [Cluster map window](#cluster-map-window). This fork installs it on |
-| Test: show the turn card at the top, then reboot | Only for a 1010×376 window: the turn card at the top, centred (`40,127,127,127`, the settings before 1.1.2). Google Maps places its card at the top of the space the insets leave and the car below it in the same space |
-| Test: show the turn card at the bottom, then reboot | Only for a 1010×376 window: the turn card in a band at the bottom, between the two lower segments (`183,10,200,200`), so it no longer covers the road ahead. Not yet car-tested: where Maps then puts the car is up to Maps |
-| Test: hidden turn card, car higher, then reboot | Only for a 1010×376 window: the card stays hidden, in its 160×60 space 25 lines higher (`75,163,320,320`, 25-45 % of the height, the standard of 1.2.2-beta2 and beta3), so the car sits further from the arrival line at the bottom. Car-tested. A full-width space (beta4's "car lower" test, `105,133,0,0`) let Maps put the card at the side |
-| Turn card as installed (hidden), then reboot | Back to the settings' own insets from any test. This fork's settings hide the card (`100,138,320,320`, a 160×60 space from 34 to 54 % of the height): Maps leaves its card out when the space is too short for it, draws the car a little below the space and the arrival time in a line at the bottom. An install from the card also does that |
+| Turn card hidden (standard), then reboot | Only for a 1010×376 window: no green card. The 160×60 space at 25-45 % of the height (`75,163,320,320`) is too short for it, so Maps leaves it out, draws the car just below the middle and the arrival time in a line at the bottom. Car-tested |
+| Turn card top right, then reboot | The same space 25 lines lower (`100,138,320,320`): Maps shows the card in the top right corner with the arrival time under it, and the car lower down. Car-tested |
+| Turn card top left (a try), then reboot | As top right but the space moved right (`100,138,480,160`), so the free room is on the left. Maps decides which side its card goes; if it stays right, the car is just further right. Not yet car-tested |
 | Test: map smaller / larger (DPI -10 / +10), then reboot | Changes `GAL_SECONDARY_DPI` in the unit's copy in steps of 10, between 80 and 170: smaller draws the map, its text and the turn card smaller. The turn card positions above are measured at DPI 110. The status check shows the value |
 | Map size as installed, then reboot | Back to the DPI the install wrote. An install from the card also does that |
 | Test: cockpit map 30 fps mode, then reboot | The unit sends the cockpit its map picture 30 times a second instead of 20: the green menu swaps the unit's `NavActiveIgnore.jar` for a copy that differs only in that number (`ChangeDataRateSequence`, stock firmware 10, the patch 20). Only when that jar is this package's. Not yet car-tested: if the cockpit map or the car's own map stutters, freezes or stays black, switch back. The status check shows the rate |
@@ -224,12 +223,14 @@ streams; Google's own head unit documentation sets a cluster up this way).
 The hook scales DPI and insets from the 800×298 band to the window by
 1010/800, so the settings keep their meaning; its log says
 `event=config.hd_frame`. The player log says `1:1 (exact pixels)` in its
-`render:` line when it works. Decoding the larger frame costs a few
-milliseconds a frame; the margins are black and cost almost nothing, and
-from 1.2.2-beta4 only the window's part is copied and uploaded. Car-tested on
-the Superb (1.2.2-beta3): sharper than the sharper map. The phone sent about
-8 to 10 pictures a second there; the player's `timing:` line, once a minute
-with its `health:` line, says where the time goes. If the cockpit ever shows
+`render:` line when it works. The margins are black and cost almost nothing,
+and from 1.2.2-beta4 only the window's part is copied and uploaded.
+Car-tested on the Superb (1.2.2-beta3): sharper than the sharper map, but
+only 9 to 10 pictures a second. The player's `timing:` line (once a minute
+with its `health:` line, from beta4) showed why: decoding took about 100 ms
+a picture in software without NEON, one core full; copying, uploading and
+showing took about 13 ms. From beta5 FFmpeg is built with the Tegra 3's NEON
+routines (`cpu: NEON present` in the player log). If the cockpit ever shows
 no map, choose **Test: 800x480 picture**.
 
 Upstream has the same switch (off by default) but scales the insets
@@ -261,8 +262,9 @@ it must start at the beginning of the line, with no `#` in front.
 |---|---|---|
 | `GAL_SECONDARY_DPI` | 110 (this fork: smaller turn card on the Skoda) | map text and turn card too big (lower) or too small (higher). Upstream ships `auto`, which the installer fills in per make (Skoda 125); a number here is kept as it is |
 | `GAL_PRIMARY_DPI` | unset (the unit's own) | Android Auto on the **centre screen** looks too large or too small. 60 to 400, the unit's own is usually 213; lower shows more. The same as aawireless's DPI setting, but kept in passthrough mode. Remove the `#` in front of the line. Car-tested upstream (#71), not yet on a Skoda |
-| `GAL_SECONDARY_INSETS` | 100,138,320,320 (this fork: turn card hidden, see [Route 2: green menu](#route-2-green-menu)) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; beyond that the smallest ones are cut to 127, one at a time, until the setting fits. See the settings owners have settled on, below |
-| `GAL_CROP_TOP`, `GAL_CROP_BOTTOM` | unset | you want a custom vertical crop of Android Auto's 800×480 frame instead of the margins. Nonzero values disable the installer's margins but keep its pixel-aspect setting (including `CLUSTERMAP_FULL_FRAME=1`); the player crops those rows and stretches the rest to the full window. From upstream (Audi A3, #85); not tried on a Skoda, where the sharper map does this job |
+| `GAL_SECONDARY_INSETS` | auto (this fork: from `CLUSTERMAP_TURN_CARD` on 1010×376) | map controls or the ETA hide behind the dials or a warning light. Top, bottom, left, right. With theme 0 up to three values may be above 127, with theme 1 or 2 only one; beyond that the smallest ones are cut to 127, one at a time, until the setting fits. See the settings owners have settled on, below |
+| `CLUSTERMAP_TURN_CARD` | hidden | where Google Maps shows its turn card on the 1010×376 window: `hidden` (no card, `75,163,320,320`), `top_right` (`100,138,320,320`) or `top_left` (a try, `100,138,480,160`). The green menu's "Turn card ..." entries switch it in the car; the next install keeps that choice while this line says hidden. Numbers in `GAL_SECONDARY_INSETS` win over it |
+$1 unset | you want a custom vertical crop of Android Auto's 800×480 frame instead of the margins. Nonzero values disable the installer's margins but keep its pixel-aspect setting (including `CLUSTERMAP_FULL_FRAME=1`); the player crops those rows and stretches the rest to the full window. From upstream (Audi A3, #85); not tried on a Skoda, where the sharper map does this job |
 | `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark. 1 or 2 costs two bytes of the insets message, so fewer insets can go above 127 |
 | `CLUSTERMAP_KEEP_SETTINGS` | unset (keep) | you want a clean install. Each install remembers the lines you changed in `gal_dualscreen.conf` and puts them back at the next install wherever the new card still has the shipped default; a line changed on the new card wins, and `update_result.txt` lists what was kept. When you install the same release again, a setting you have edited on the card since the last install is used as the card has it. `0` installs only the card's settings. Settings from releases before this mechanism (the fork's 1.1.x) are not carried over. The green-menu tests are not kept: they change only the unit's copy. The uninstall forgets them |
 | `CLUSTERMAP_FULL_FRAME` | 0 | upstream's sharper map, only with `CLUSTERMAP_720P=0`: the whole 800×480 frame with wide pixels, see [Cluster map window](#cluster-map-window) |
@@ -299,8 +301,8 @@ do not carry over one to one.
 | VW 12.3 in Passat B8 (`K4525`) | 145 | `56,73,127,127` | d4nt387, #8 |
 | VW 12.3 in Tiguan (`K4525`) | 145 | `56,120,127,127` | totocastellano-cmd, #27 |
 | Skoda 1010×376 (`P4526`), upstream's *auto* | 125 | `40,127,127,127` | raskrivuska, #15 (the card at the top; the green menu's top test) |
-| Skoda 1010×376 (`P4526`), turn card hidden, 720p | 110 | `100,138,320,320` | this fork, 1.2.2-beta4 (shipped): the car nearer the arrival line at the bottom |
-| Skoda 1010×376 (`P4526`), turn card hidden | 110 | `75,163,320,320` | this fork, beta12 to 1.2.2-beta3: the car just below the middle; the green menu's "car higher" test |
+| Skoda 1010×376 (`P4526`), turn card hidden (shipped) | 110 | `75,163,320,320` | this fork, beta12 to 1.2.2-beta3 and from beta5: the car just below the middle, the arrival time at the bottom |
+| Skoda 1010×376 (`P4526`), turn card top right | 110 | `100,138,320,320` | this fork, 1.2.2-beta4: the card top right with the arrival time, the car lower |
 | Skoda 1010×376 (`P4526`), turn card hidden, car lower | 110 | `134,104,0,0` | this fork, 1.1.2 to 1.2.2-beta1: the car behind the lower bar, out of sight |
 | VW 12.3 in, ETA card showing (`K4525`) | 138 | `52,82,127,127` | totocastellano-cmd, #20 and #12 (`53,83,127,127` on a second car: the same within a pixel) |
 | VW 12.3 in Passat B8 2019 (`K4525`), ETA card showing, with `GAL_SECONDARY_UI_THEME=0` | 138 | `56,73,127,127` | danielszyszko-ui, #41 |

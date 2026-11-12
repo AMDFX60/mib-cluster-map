@@ -1,8 +1,9 @@
 #!/bin/sh
 . "`dirname "$0"`/common.sh"
-# The turn card at the top (test), in the unit's settings copy.
-echo "Test: show the turn card at the top"
-sh "$PKG/scripts/card_layout.sh" top
+# The turn card setting "hidden", in the unit's settings copy; the next
+# install keeps it (scripts/card_layout.sh).
+echo "Turn card hidden (standard)"
+sh "$PKG/scripts/card_layout.sh" hidden
 RC=$?
 echo
 if [ $RC -eq 0 ]; then

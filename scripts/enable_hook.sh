@@ -412,6 +412,10 @@ PKG_SAVED="$PRELOAD_WRITE_DIR/package_version.txt"
 PKG_NOW=`head -1 "$CARD_ROOT/scripts/package_version.txt" 2>/dev/null || :`
 PKG_LAST=`head -1 "$PKG_SAVED" 2>/dev/null || :`
 CARD_SAVED_NEW=
+# Skoda fork: the turn card chosen in the green menu (scripts/card_layout.sh),
+# read from the unit's copy before this install replaces it; applied with the
+# auto insets below.
+MENU_CARD=`sed -n 's/^CLUSTERMAP_TURN_CARD_MENU=\([a-z_]*\)[ 	]*$/\1/p' "$CONF_COPY" 2>/dev/null | tail -1 || :`
 if [ -r "$CARD_ROOT/gal_dualscreen.conf" ]; then
     if awk '{ sub(/\r$/, ""); print }' "$CARD_ROOT/gal_dualscreen.conf" > "$CONF_COPY.card" 2>/dev/null &&
        [ -s "$CONF_COPY.card" ]; then
@@ -578,6 +582,46 @@ else
     CAR_DPI=125; CAR_INSETS=40,40,127,127
     AUTO_FROM="no tested values for this car and window; shipped defaults"
 fi
+INSETS_FROM=$AUTO_FROM
+# Skoda fork: the turn card. CLUSTERMAP_TURN_CARD (hidden, top_right,
+# top_left) gives the "auto" insets on the Skoda's 1010x376 window, measured
+# there (scripts/card_layout.sh has the same table). A choice made in the
+# green menu (MENU_CARD, read above) is kept while the card says hidden; any
+# other value on the card wins. Numbers in GAL_SECONDARY_INSETS win over both.
+TURN_CARD=`sed -n 's/^CLUSTERMAP_TURN_CARD=\([a-z_]*\)[ 	]*$/\1/p' "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
+TURN_CARD_FROM="gal_dualscreen.conf"
+TURN_CARD_KEPT=0
+if [ -z "$TURN_CARD" ] || [ "$TURN_CARD" = hidden ]; then
+    case "$MENU_CARD" in
+        hidden|top_right|top_left) TURN_CARD=$MENU_CARD; TURN_CARD_FROM="the green menu, kept"; TURN_CARD_KEPT=1 ;;
+    esac
+fi
+[ -n "$TURN_CARD" ] || TURN_CARD=hidden
+case "$TURN_CARD" in
+    hidden)    TURN_CARD_INSETS=75,163,320,320 ;;
+    top_right) TURN_CARD_INSETS=100,138,320,320 ;;
+    top_left)  TURN_CARD_INSETS=100,138,480,160 ;;
+    *) echo "WARNING: CLUSTERMAP_TURN_CARD=$TURN_CARD is not hidden, top_right or top_left; using hidden." >&2
+       TURN_CARD=hidden; TURN_CARD_INSETS=75,163,320,320 ;;
+esac
+if [ "${MAP_W}x${MAP_H}" = 1010x376 ]; then
+    CAR_INSETS=$TURN_CARD_INSETS
+    INSETS_FROM="turn card $TURN_CARD, from $TURN_CARD_FROM"
+    # One line of each in the copy: the status screen, the green menu and the
+    # next install read them.
+    if sed -e '/^[ 	]*CLUSTERMAP_TURN_CARD[ 	]*=/d' \
+           -e '/^[ 	]*CLUSTERMAP_TURN_CARD_MENU[ 	]*=/d' \
+           "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" > "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" &&
+       { echo "CLUSTERMAP_TURN_CARD=$TURN_CARD"
+         if [ "$TURN_CARD_KEPT" = 1 ]; then echo "CLUSTERMAP_TURN_CARD_MENU=$TURN_CARD"; fi; } \
+           >> "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" &&
+       mv "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new" "$PRELOAD_WRITE_DIR/gal_dualscreen.conf"; then
+        :
+    else
+        rm -f "$PRELOAD_WRITE_DIR/gal_dualscreen.conf.new"
+        echo "WARNING: could not write the turn card choice; the next install may not keep it." >&2
+    fi
+fi
 CONF_DPI=`sed -n 's/^GAL_SECONDARY_DPI=\([^ 	]*\)[ 	]*$/\1/p' "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | head -1`
 CONF_INSETS=`sed -n 's/^GAL_SECONDARY_INSETS=\([^ 	]*\)[ 	]*$/\1/p' "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | head -1`
 if [ "$CONF_DPI" = auto ] || [ "$CONF_INSETS" = auto ]; then
@@ -605,7 +649,7 @@ if [ "$CAR_CONTEXT" != 70 ] &&
     fi
 fi
 [ "$CONF_DPI" = auto ] && echo "Map DPI: $CAR_DPI ($AUTO_FROM)" || echo "Map DPI: ${CONF_DPI:-built-in} (from gal_dualscreen.conf)"
-[ "$CONF_INSETS" = auto ] && echo "Map insets: $CAR_INSETS ($AUTO_FROM)" || echo "Map insets: ${CONF_INSETS:-built-in} (from gal_dualscreen.conf)"
+[ "$CONF_INSETS" = auto ] && echo "Map insets: $CAR_INSETS ($INSETS_FROM)" || echo "Map insets: ${CONF_INSETS:-built-in} (from gal_dualscreen.conf; CLUSTERMAP_TURN_CARD not used)"
 # The DPI the hook will actually use, for the summary. --dpi goes into the
 # environment, which the hook reads before the conf file, so it wins.
 case "$CONF_DPI" in

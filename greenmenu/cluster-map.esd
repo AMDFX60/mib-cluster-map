@@ -42,20 +42,16 @@ script
     label   "720p picture 1:1 (standard), then reboot"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top.sh"
-    label   "Test: show the turn card at the top, then reboot"
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_hidden.sh"
+    label   "Turn card hidden (standard), then reboot"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_bottom.sh"
-    label   "Test: show the turn card at the bottom, then reboot"
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top_right.sh"
+    label   "Turn card top right, then reboot"
 
 script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_higher.sh"
-    label   "Test: hidden turn card, car higher, then reboot"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_standard.sh"
-    label   "Turn card as installed (hidden), then reboot"
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/card_top_left.sh"
+    label   "Turn card top left (a try), then reboot"
 
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/size_smaller.sh"

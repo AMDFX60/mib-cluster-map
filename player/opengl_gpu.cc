@@ -43,6 +43,7 @@
 #include <EGL/egl.h>
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
+#include <sys/syspage.h>
 #else
 #include <GLES2/gl2.h>
 #include <GLFW/glfw3.h>
@@ -52,6 +53,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
+#include <libavutil/cpu.h>
 }
 
 // ---------------- Configuration & Performance Knobs ----------------
@@ -1890,6 +1892,24 @@ int main(int argc, char* argv[]) {
     g_isSocket = (strncmp(g_videoSource, "tcp://", 6) == 0 || is_unix_sock);
     LOG("stream-player starting (source: %s, loop: %d, pool: %d)",
         g_videoSource, g_loopFile ? 1 : 0, kBufferPoolSize);
+#ifdef __QNX__
+    /*
+     * Skoda fork: FFmpeg is built with its NEON code (build_local.sh): the
+     * unit's Tegra 3 has NEON, and the software H.264 decoder took about
+     * 100 ms a 720p picture without it (1.2.2-beta4 log). FFmpeg cannot ask
+     * QNX at run time, so the system page is asked here; without NEON its
+     * NEON routines are switched off rather than run.
+     */
+    {
+        unsigned cpuFlags = SYSPAGE_ENTRY(cpuinfo)->flags;
+        if (cpuFlags & ARM_CPU_FLAG_NEON) {
+            LOG("cpu: NEON present (flags 0x%x); FFmpeg uses its NEON decoder routines", cpuFlags);
+        } else {
+            av_force_cpu_flags(av_get_cpu_flags() & ~AV_CPU_FLAG_NEON);
+            LOGE("cpu: no NEON reported (flags 0x%x); FFmpeg's NEON routines switched off", cpuFlags);
+        }
+    }
+#endif
 
     signal(SIGINT,  signal_handler);
     signal(SIGTERM, signal_handler);
