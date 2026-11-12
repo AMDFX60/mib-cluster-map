@@ -541,14 +541,29 @@ if [ "$FULL_FRAME" = 1 ] && ! frame_full_ok $MAP_W $MAP_H; then
     echo "CLUSTERMAP_FULL_FRAME: the ${MAP_W}x${MAP_H} window is not wider than the frame's 5:3, so it gets no full frame; kept on in case the cockpit's window turns out wider."
     FULL_FRAME=0
 fi
-if ! frame_write_conf "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" $MAP_W $MAP_H $FULL_FRAME_ASKED; then
-    if [ "$FULL_FRAME" = 1 ]; then
-        echo "WARNING: could not edit the settings copy; CLUSTERMAP_FULL_FRAME ignored, using margins."
+# Skoda fork, CLUSTERMAP_720P=1: a 1280x720 frame whose margins leave exactly
+# the window, shown 1:1 by the player. Wins over full frame; kept as asked
+# like full frame when this window cannot use it.
+HD_FRAME=`sed -n 's/^CLUSTERMAP_720P=\([01]\)[ 	]*$/\1/p' \
+    "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`
+[ "$HD_FRAME" = 1 ] || HD_FRAME=0
+HD_FRAME_ASKED=$HD_FRAME
+if [ "$HD_FRAME" = 1 ] && ! frame_hd_ok $MAP_W $MAP_H; then
+    echo "CLUSTERMAP_720P: the ${MAP_W}x${MAP_H} window does not fit a 1280x720 frame with margins of at most half; using the 800x480 frame."
+    HD_FRAME=0
+fi
+if [ "$HD_FRAME" = 1 ]; then FULL_FRAME=0; fi
+if ! frame_write_conf "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" $MAP_W $MAP_H $FULL_FRAME_ASKED $HD_FRAME_ASKED; then
+    if [ "$FULL_FRAME" = 1 ] || [ "$HD_FRAME" = 1 ]; then
+        echo "WARNING: could not edit the settings copy; CLUSTERMAP_FULL_FRAME and CLUSTERMAP_720P ignored, using margins."
     fi
     FULL_FRAME=0
-    frame_geometry $MAP_W $MAP_H 0
+    HD_FRAME=0
+    frame_geometry $MAP_W $MAP_H 0 0
 fi
-if [ "$FULL_FRAME" = 1 ]; then
+if [ "$HD_FRAME" = 1 ]; then
+    echo "Android Auto: 1280x720 frame with ${MARGIN_W}x${MARGIN_H} margins, the ${MAP_W}x${MAP_H} window's own pixels shown 1:1 (CLUSTERMAP_720P, a test; not car-tested yet)."
+elif [ "$FULL_FRAME" = 1 ]; then
     echo "Android Auto: whole 800x480 frame, pixel aspect ${PIXEL_ASPECT_E4}/10000, stretched to the window (CLUSTERMAP_FULL_FRAME, the Skoda fork's default; car-tested on a Superb P4526)."
 elif [ "$MARGIN_W" -gt 0 ] || [ "$MARGIN_H" -gt 0 ]; then
     echo "Android Auto: 800x480 with ${MARGIN_W}x${MARGIN_H} margins, scaled to fill the window."
@@ -872,7 +887,9 @@ echo "  preload target: $PRELOAD_SO_ALIAS"
 echo "    on the internal /mnt/app partition, not the SD card -- avoids the"
 echo "    SD-card mount-timing race at GAL's boot-time launch."
 echo "  output mode: $OUTPUT (video forwarded to stream-player)"
-if [ "$FULL_FRAME" = 1 ]; then
+if [ "$HD_FRAME" = 1 ]; then
+    echo "  cluster: Android Auto 1280x720 @ 30 fps (margins ${MARGIN_W}x${MARGIN_H}, shown 1:1), DPI $EFFECTIVE_DPI before the hook's 720p scaling, ${MAP_W}x${MAP_H} window"
+elif [ "$FULL_FRAME" = 1 ]; then
     echo "  cluster: Android Auto 800x480 @ 30 fps (full frame, pixel aspect ${PIXEL_ASPECT_E4}/10000), DPI $EFFECTIVE_DPI, ${MAP_W}x${MAP_H} window"
 else
     echo "  cluster: Android Auto 800x480 @ 30 fps (margins ${MARGIN_W}x${MARGIN_H}), DPI $EFFECTIVE_DPI, ${MAP_W}x${MAP_H} window"

@@ -99,6 +99,7 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | Uninstall and restore original state | Full revert |
 | Sharper map ON (whole frame, default), then reboot | Switches `CLUSTERMAP_FULL_FRAME` on in the unit's copy of the settings, without editing the card; see [Cluster map window](#cluster-map-window). This fork installs it on |
 | Sharper map OFF (margins), then reboot | Back to the margins. An install from the card also writes the card's setting again |
+| Test: 720p picture 1:1 (Sharper map ON ends it), then reboot | Sets `CLUSTERMAP_720P=1` in the unit's copy: the phone is asked for a 1280×720 frame with margins that leave exactly the cockpit window, and the player shows it 1:1; see [Cluster map window](#cluster-map-window). Not yet car-tested: if the cockpit shows no map, choose Sharper map ON |
 | Test: show the turn card at the top, then reboot | Only for a 1010×376 window: the turn card at the top, centred (`40,127,127,127`, the settings before 1.1.2). Google Maps places its card at the top of the space the insets leave and the car below it in the same space |
 | Test: show the turn card at the bottom, then reboot | Only for a 1010×376 window: the turn card in a band at the bottom, between the two lower segments (`183,10,200,200`), so it no longer covers the road ahead. Not yet car-tested: where Maps then puts the car is up to Maps |
 | Test: hidden turn card, car lower, then reboot | Only for a 1010×376 window: the card stays hidden, but its space moves from 25-45 % to 35-55 % of the height (`105,133,0,0`, full width), so the car is drawn lower and more road ahead shows. Maps draws the car a little below the space: at 45-65 % (`134,104,0,0`, the standard of 1.1.2 to 1.2.2-beta1) it went behind the cockpit's lower bar. Not yet car-tested |
@@ -216,6 +217,21 @@ unit's copy of the settings. A screen added before this version has no such
 entries: run route 1 once to update it. If the map looks stretched sideways,
 the phone ignored the ratio: switch it off again.
 
+**720p picture (test, `CLUSTERMAP_720P=1`):** even the sharper map leaves
+only 800 columns for the 1010 of the window, and the phone squeezes its picture
+before the player stretches it again. Android Auto also offers 1280×720 for a
+cluster display: with margins of 270×344 the phone draws exactly the
+1010×376 window's pixels into the middle of that frame, and the player shows
+them 1:1, without any scaling (other projects run 720p and 1080p cluster
+streams; Google's own head unit documentation sets a cluster up this way).
+The hook scales DPI and insets from the 800×298 band to the window by
+1010/800, so the settings keep their meaning; its log says
+`event=config.hd_frame`. The player log says `1:1 (exact pixels)` in its
+`render:` line when it works. Decoding the larger frame costs a few
+milliseconds a frame; the margins are black and cost almost nothing. Not
+yet car-tested: whether this unit's Android Auto and the phone accept it is
+what the test shows. If the cockpit shows no map, choose **Sharper map ON**.
+
 Upstream has the same switch (off by default) but scales the insets
 differently: it first takes the band's margins (91 lines top and bottom on
 1010×376) off the top and bottom inset. This fork keeps its own rule, because
@@ -250,6 +266,7 @@ it must start at the beginning of the line, with no `#` in front.
 | `GAL_SECONDARY_UI_THEME` | 0 (automatic) | 0 switches between day and night with the car, as the centre screen does (Waze stays dark); 1 is always light, 2 always dark. 1 or 2 costs two bytes of the insets message, so fewer insets can go above 127 |
 | `CLUSTERMAP_KEEP_SETTINGS` | unset (keep) | you want a clean install. Each install remembers the lines you changed in `gal_dualscreen.conf` and puts them back at the next install wherever the new card still has the shipped default; a line changed on the new card wins, and `update_result.txt` lists what was kept. When you install the same release again, a setting you have edited on the card since the last install is used as the card has it. `0` installs only the card's settings. Settings from releases before this mechanism (the fork's 1.1.x) are not carried over. The green-menu tests are not kept: they change only the unit's copy. The uninstall forgets them |
 | `CLUSTERMAP_FULL_FRAME` | 1 (this fork) | 1 uses the whole frame on a cluster map window wider than 800×480: a little sharper, see [Cluster map window](#cluster-map-window). 0 goes back to the margins |
+| `CLUSTERMAP_720P` | 0 | 1 asks the phone for a 1280×720 frame with margins that leave exactly the window (270×344 on 1010×376), shown 1:1. Wins over `CLUSTERMAP_FULL_FRAME`. DPI and insets stay set as for the 800×298 band; the hook scales them to the window. A test, not car-tested yet |
 | `GAL_DUALSCREEN_AAP_MINOR` | 5 | the Android Auto version the unit claims (1.x). The map shows at 2 to 7. At 6 or higher Google Maps sends newer navigation messages this unit cannot read; the hook translates them into the old ones (`GAL_DUALSCREEN_NAV_TRANSLATE`, on), so the arrows jar should keep its turn pictograms; not yet car-tested above 5 (#4). This fork's Skoda settings were car-tested at 7 and again at 5 (beta12, map and insets); go back to 7 if insets, theme or the sharper map stop working |
 | `GAL_PLAYER_WINDOW` | 1010x376 (this fork: Skoda) | used only when the installer says the cluster map window was "not reported by the display manager"; otherwise the reported size wins. Set it to your cluster's window if that is not 1010x376 |
 | `GAL_VC_CONTEXT` | 70 | the cockpit map is in another display context. 70 on VW, SEAT and Skoda; Audi units differ (the installer sets them by itself) |
@@ -261,6 +278,7 @@ it must start at the beginning of the line, with no `#` in front.
 | `GAL_PLAYER_DECODER` | sw | `sw` is the tested software decoder. `hw` uses the unit's own video decoder and frees most of a processor core. If it will not open, the player uses software; if it fails while decoding, it stays off until the next reboot. **Not yet car-tested** |
 | `GAL_PLAYER_PRIORITY` | 12 (this fork) | the player's priority, raised to this and never lowered (QNX's default is 10), so the compositor stalls the cockpit map less. 0 or no line leaves it as spawned; at most 20. The player log says `priority: 10 -> 12` |
 | `GAL_PLAYER_NVSS_OUTPUT` | 1 | the cluster stays black with `hw`: try 0 (uncomment the line first) |
+| `GAL_PLAYER_COLOR` | auto | `auto` converts colours as the stream says, limited range (16-235) unless it says full. Before 1.2.2-beta3 every stream was taken as full range, which made blacks grey and the map paler. `old` puts that back to compare; the player log line `colour:` says what was chosen |
 | `GAL_DUALSCREEN_DEBUG`, `GAL_FIX_STREAM_TIMING`, `GAL_PLAYER_STATS`, `GAL_HOOK_LOG_MAX_MB` | 0, 0, 0, 1 | full trace for a bug report: 0, 1, 1, 10, then install over SSH with `enable_hook.sh --debug` |
 
 ### Settings owners have settled on

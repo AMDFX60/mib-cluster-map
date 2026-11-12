@@ -10,6 +10,12 @@
 # declares non-square pixels instead, pixel_aspect_ratio_e4 = 6000 * W / H
 # (16117 on 1010x376): the phone draws on all 480 lines, squeezed, and the
 # player stretches the frame to the window.
+#
+# Skoda fork, 720p (CLUSTERMAP_720P=1): the phone is asked for a 1280x720
+# frame whose margins leave exactly the window, 270x344 on 1010x376, and the
+# player shows those pixels 1:1, without any scaling. It wins over full
+# frame. The hook scales DPI and insets from the band to the window, so the
+# settings keep their meaning.
 
 # frame_full_ok W H
 # True when full frame can apply: only on windows wider than the frame's 5:3.
@@ -20,12 +26,23 @@ frame_full_ok()
     [ `expr $1 \* 480` -gt `expr $2 \* 800` ]
 }
 
-# frame_geometry W H FULL
+# frame_hd_ok W H
+# True when a 1280x720 frame holds the window with margins of at most half
+# the frame on each side, as the hook requires.
+frame_hd_ok()
+{
+    [ "$1" -le 1280 ] && [ "$2" -le 720 ] && [ "$1" -ge 640 ] && [ "$2" -ge 360 ]
+}
+
+# frame_geometry W H FULL [HD]
 # Sets BAND_MARGIN_W/H (the margins of the band, whatever FULL says: the
-# insets are measured in it) and MARGIN_W/H and PIXEL_ASPECT_E4 for FULL.
+# insets are measured in it), and MARGIN_W/H, PIXEL_ASPECT_E4 and FRAME_W/H
+# (the frame the phone is asked for) for FULL and HD.
 # FULL=1 on a window that is not wider than 5:3 gives the margins, as 0 does;
 # CLUSTERMAP_FULL_FRAME is still written as asked, so a later correction of
-# the window (window_fix.sh) can apply it.
+# the window (window_fix.sh) can apply it. HD=1 on a window that fits
+# 1280x720 gives the 720p frame and wins over FULL; margins are even, so an
+# odd window size leaves one line or column less than the window.
 # "|| :" because expr exits 1 when the answer is 0, and callers run under
 # set -e.
 frame_geometry()
@@ -37,7 +54,15 @@ frame_geometry()
         BAND_MARGIN_W=`expr 800 - \( 480 \* $1 + $2 \) / \( 2 \* $2 \) \* 2 || :`
         BAND_MARGIN_H=0
     fi
-    if [ "$3" = 1 ] && frame_full_ok $1 $2; then
+    FRAME_W=800
+    FRAME_H=480
+    if [ "${4:-0}" = 1 ] && frame_hd_ok $1 $2; then
+        FRAME_W=1280
+        FRAME_H=720
+        MARGIN_W=`expr \( 1281 - $1 \) / 2 \* 2 || :`
+        MARGIN_H=`expr \( 721 - $2 \) / 2 \* 2 || :`
+        PIXEL_ASPECT_E4=10000
+    elif [ "$3" = 1 ] && frame_full_ok $1 $2; then
         MARGIN_W=0
         MARGIN_H=0
         PIXEL_ASPECT_E4=`expr \( 6000 \* $1 + $2 / 2 \) / $2`
@@ -50,27 +75,34 @@ frame_geometry()
 
 FRAME_CONF_MARK="# Cluster map window (written by the installer, switched by the green menu)"
 
-# frame_write_conf CONF W H FULL
-# Replaces the window lines in CONF with those for a W x H window and FULL
-# (0 or 1), through a new file and a rename; returns 1 with CONF untouched
-# if that fails. Every existing line of these keys goes first: the hook takes
-# a key's first line and the player its last, so each must be there once.
+# frame_write_conf CONF W H FULL [HD]
+# Replaces the window lines in CONF with those for a W x H window, FULL and
+# HD (each 0 or 1; HD 0 when left out), through a new file and a rename;
+# returns 1 with CONF untouched if that fails. Every existing line of these
+# keys goes first: the hook takes a key's first line and the player its
+# last, so each must be there once.
 frame_write_conf()
 {
-    frame_geometry "$2" "$3" "$4"
+    frame_geometry "$2" "$3" "$4" "${5:-0}"
     sed -e '/^[ 	]*GAL_PLAYER_WINDOW[ 	]*=/d' \
+        -e '/^[ 	]*GAL_SECONDARY_WIDTH[ 	]*=/d' \
+        -e '/^[ 	]*GAL_SECONDARY_HEIGHT[ 	]*=/d' \
         -e '/^[ 	]*GAL_SECONDARY_MARGINS[ 	]*=/d' \
         -e '/^[ 	]*GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4[ 	]*=/d' \
         -e '/^[ 	]*CLUSTERMAP_FULL_FRAME[ 	]*=/d' \
+        -e '/^[ 	]*CLUSTERMAP_720P[ 	]*=/d' \
         -e '/^# Cluster map window (written by the installer/d' \
         -e '/^# Written by the installer from the cluster map window it read\.$/d' \
         "$1" > "$1.new" 2>/dev/null &&
     { echo
       echo "$FRAME_CONF_MARK"
       echo "GAL_PLAYER_WINDOW=$2x$3"
+      echo "GAL_SECONDARY_WIDTH=$FRAME_W"
+      echo "GAL_SECONDARY_HEIGHT=$FRAME_H"
       echo "GAL_SECONDARY_MARGINS=${MARGIN_W}x${MARGIN_H}"
       echo "GAL_SECONDARY_PIXEL_ASPECT_RATIO_E4=$PIXEL_ASPECT_E4"
-      echo "CLUSTERMAP_FULL_FRAME=$4"; } >> "$1.new" 2>/dev/null &&
+      echo "CLUSTERMAP_FULL_FRAME=$4"
+      echo "CLUSTERMAP_720P=${5:-0}"; } >> "$1.new" 2>/dev/null &&
     mv "$1.new" "$1" 2>/dev/null || { rm -f "$1.new" 2>/dev/null; return 1; }
     chmod 644 "$1" 2>/dev/null
     return 0

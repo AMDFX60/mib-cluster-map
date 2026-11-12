@@ -55,6 +55,20 @@
  */
 #define VIDEO_SINK_SIZE 0x50u
 #define VIDEO_CODEC_RESOLUTION_800_480 1
+#define VIDEO_CODEC_RESOLUTION_1280_720 2
+
+/*
+ * The cluster's codec resolution: 800x480, or 1280x720 when the settings ask
+ * for it (CLUSTERMAP_720P, which writes GAL_SECONDARY_WIDTH/HEIGHT). At 720p
+ * the margins leave exactly the cockpit window's pixels, which the player
+ * shows 1:1. gal_hook_init allows only these two.
+ */
+static uint32_t secondary_resolution_enum(const gal_secondary_config *config)
+{
+    if (config != NULL && config->width == 1280u && config->height == 720u)
+        return VIDEO_CODEC_RESOLUTION_1280_720;
+    return VIDEO_CODEC_RESOLUTION_800_480;
+}
 
 /* (GalReceiver *this, ProtocolEndpointBase *endpoint) -- see the hook's
  * own definition below for why both parameters are mandatory. */
@@ -678,7 +692,7 @@ static void set_video_config_ui_insets(void *sink, const gal_secondary_config *c
 
     fps_val = load_u32(vconf, 0x2cu);
     /* In protobuf schema, fps is enum (VIDEO_FPS_30 = 2), not integer 30 */
-    if (load_u32(vconf, 0x28u) != VIDEO_CODEC_RESOLUTION_800_480 ||
+    if (load_u32(vconf, 0x28u) != secondary_resolution_enum(config) ||
         (fps_val != 2u && fps_val != 30u)) {
         gal_hook_logf("event=video.insets result=mismatch vconf=%p res=%u fps=%u",
                       vconf, load_u32(vconf, 0x28u), fps_val);
@@ -815,7 +829,7 @@ static int build_secondary_sink(void *primary, void *controller)
     }
     for (index = 0u; index < primary_config_count; ++index) {
         unsigned char *entry = (unsigned char *)primary_config_data + index * g_profile->cfg_entry_size;
-        if (load_u32(entry, 0u) == VIDEO_CODEC_RESOLUTION_800_480 &&
+        if (load_u32(entry, 0u) == secondary_resolution_enum(config) &&
             load_u32(entry, 4u) == config->fps) {
             memcpy(secondary_config_entry, entry, g_profile->cfg_entry_size);
             store_u32(secondary_config_entry, 16u, config->dpi);
@@ -829,8 +843,8 @@ static int build_secondary_sink(void *primary, void *controller)
         }
     }
     if (!found_video_config) {
-        gal_hook_logf("event=secondary.video_config result=failed reason=no_matching_800x480_fps count=%u requested_fps=%u",
-                      primary_config_count, config->fps);
+        gal_hook_logf("event=secondary.video_config result=failed reason=no_matching_resolution_fps count=%u resolution_enum=%u requested_fps=%u",
+                      primary_config_count, secondary_resolution_enum(config), config->fps);
         goto fail;
     }
     secondary_config_vector[0] = 1u;
@@ -931,13 +945,13 @@ static int build_secondary_sink(void *primary, void *controller)
               (uint32_t)(uintptr_t)g_secondary_impl);
 
     /*
-     * 800x480 (the only resolution the cluster takes), configured fps,
-     * the configured margins, configured DPI, decoder depth 3 and square
-     * pixels.
+     * 800x480 (or 1280x720 with CLUSTERMAP_720P), configured fps,
+     * the configured margins, configured DPI, decoder depth 3 and the
+     * configured pixel aspect.
      */
     /* Pass decoder_depth=3 for phone MediaCodec 3-frame pipelining */
     add_configuration(g_secondary_sink,
-        VIDEO_CODEC_RESOLUTION_800_480, (int)config->fps,
+        (int)secondary_resolution_enum(config), (int)config->fps,
         (int)config->margin_width, (int)config->margin_height,
         (int)config->dpi, 3, (int)config->pixel_aspect_ratio_e4);
     /* The older receiver's VideoConfiguration has no unknown-field string

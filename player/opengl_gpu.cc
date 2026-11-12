@@ -146,8 +146,11 @@ struct RGBABuffer {
     size_t capacity;
     int packetBytes;
     bool isKeyframe;
+    bool colorFull;   /* the stream says full range (0-255), not 16-235 */
+    bool colorBt709;  /* the stream says BT.709, or is HD and says nothing */
 
-    RGBABuffer() : pixels(NULL), width(0), height(0), capacity(0), packetBytes(0), isKeyframe(false) {}
+    RGBABuffer() : pixels(NULL), width(0), height(0), capacity(0), packetBytes(0), isKeyframe(false),
+                   colorFull(false), colorBt709(false) {}
 
     void ensureCapacity(int w, int h) {
         size_t total = (size_t)w * h + 2 * ((size_t)(w/2) * (h/2));
@@ -279,14 +282,23 @@ static int g_pixelAspectE4 = 10000;
 static int g_priority = 0;      /* GAL_PLAYER_PRIORITY, 0 = as spawned */
 static GLfloat fittedVertices[12];
 static GLfloat croppedTexCoords[8];
+/*
+ * Skoda fork, CLUSTERMAP_720P: the phone sends 1280x720 with margins that
+ * leave exactly the window's pixels (1010x376 inside 270x344). Every window
+ * pixel then maps onto the centre of one decoded pixel, and the luma texture
+ * is sampled NEAREST, so not even the rounding of the texture coordinates in
+ * the fragment shader can blend two pixels. Any scaling keeps LINEAR.
+ */
+static bool g_lumaExact = false;
 static void fit_frame(int frameW, int frameH) {
     float sx = 1.0f, sy = 1.0f, cu = 0.0f, cv = 0.0f, par = 1.0f;
     int contentW = frameW, contentH = frameH;
     int marginTop = 0, marginLeft = 0;
+    bool aaFrame = (frameW == 800 && frameH == 480) || (frameW == 1280 && frameH == 720);
     bool cropConfigured = frameW == 800 && frameH == 480 &&
                           (g_cropTop > 0 || g_cropBottom > 0) &&
                           g_cropTop + g_cropBottom < frameH;
-    if (frameW == 800 && frameH == 480) {
+    if (aaFrame) {
         if (cropConfigured) {
             contentH = frameH - g_cropTop - g_cropBottom;
             cu = 0.0f;
@@ -298,7 +310,8 @@ static void fit_frame(int frameW, int frameH) {
                 0.0f, 1.0f - (float)g_cropBottom / (float)frameH,
             };
             memcpy(croppedTexCoords, t, sizeof t);
-        } else if (g_marginW > 0 || g_marginH > 0) {
+        } else if ((g_marginW > 0 || g_marginH > 0) &&
+                   g_marginW * 2 <= frameW && g_marginH * 2 <= frameH) {
             marginLeft = g_marginW / 2;
             marginTop = g_marginH / 2;
             contentW = frameW - g_marginW;
@@ -320,9 +333,12 @@ static void fit_frame(int frameW, int frameH) {
         memcpy(croppedTexCoords, t, sizeof t);
     }
     memcpy(fittedVertices, v, sizeof v);
-    LOG("render: %dx%d frame, %dx%d after margins/crop, pixel aspect %.4f, crop=%s, in a %dx%d window, drawn %dx%d",
+    g_lumaExact = !cropConfigured && sx == 1.0f && sy == 1.0f && par == 1.0f &&
+                  contentW == windowWidth && contentH == windowHeight;
+    LOG("render: %dx%d frame, %dx%d after margins/crop, pixel aspect %.4f, crop=%s, in a %dx%d window, drawn %dx%d, %s",
         frameW, frameH, contentW, contentH, par, cropConfigured ? "stretch" : "off", windowWidth, windowHeight,
-        (int)(sx * windowWidth + 0.5f), (int)(sy * windowHeight + 0.5f));
+        (int)(sx * windowWidth + 0.5f), (int)(sy * windowHeight + 0.5f),
+        g_lumaExact ? "1:1 (exact pixels)" : "scaled");
 }
 
 #ifdef __QNX__
@@ -351,9 +367,21 @@ static GLint  g_texAttr = -1;
 static GLint  g_texLocY = -1;
 static GLint  g_texLocU = -1;
 static GLint  g_texLocV = -1;
+static GLint  g_rangeLoc = -1;
+static GLint  g_matrixLoc = -1;
 static GLuint g_texY = 0;
 static GLuint g_texU = 0;
 static GLuint g_texV = 0;
+/*
+ * Colour conversion. The player used full-range BT.601 for every stream, but
+ * a phone's H.264 is normally limited range (Y 16-235, Cb/Cr 16-240), which
+ * that turns into grey blacks, dim whites and paler colours: less contrast,
+ * and a softer-looking map. GAL_PLAYER_COLOR=auto (the default) follows what
+ * the stream says, assuming limited range when it says nothing (the H.264
+ * default) and BT.709 for an HD frame that names no matrix; old is the
+ * previous conversion, to compare.
+ */
+static bool g_colorAuto = true;
 
 // Standard GLES2 RGBA Shaders (Proven 100% compatible with Tegra 3)
 static const char* vertexShaderSource =
@@ -372,14 +400,16 @@ static const char* fragmentShaderSource =
     "uniform sampler2D texY;\n"
     "uniform sampler2D texU;\n"
     "uniform sampler2D texV;\n"
+    "uniform vec3 range;\n"   /* Y offset, Y scale, Cb/Cr scale */
+    "uniform vec4 matrix;\n"  /* Cr->R, Cb->G, Cr->G, Cb->B */
     "void main()\n"
     "{\n"
-    "    float y = texture2D(texY, v_texCoord).r;\n"
-    "    float u = texture2D(texU, v_texCoord).r - 0.5;\n"
-    "    float v = texture2D(texV, v_texCoord).r - 0.5;\n"
-    "    float r = y + 1.402 * v;\n"
-    "    float g = y - 0.34414 * u - 0.71414 * v;\n"
-    "    float b = y + 1.772 * u;\n"
+    "    float y = (texture2D(texY, v_texCoord).r - range.x) * range.y;\n"
+    "    float u = (texture2D(texU, v_texCoord).r - 0.5) * range.z;\n"
+    "    float v = (texture2D(texV, v_texCoord).r - 0.5) * range.z;\n"
+    "    float r = y + matrix.x * v;\n"
+    "    float g = y - matrix.y * u - matrix.z * v;\n"
+    "    float b = y + matrix.w * u;\n"
     "    gl_FragColor = vec4(r, g, b, 1.0);\n"
     "}\n";
 
@@ -790,6 +820,8 @@ void InitGL() {
     g_texLocY = glGetUniformLocation(g_programObject, "texY");
     g_texLocU = glGetUniformLocation(g_programObject, "texU");
     g_texLocV = glGetUniformLocation(g_programObject, "texV");
+    g_rangeLoc = glGetUniformLocation(g_programObject, "range");
+    g_matrixLoc = glGetUniformLocation(g_programObject, "matrix");
     LOG("GL: attrib locations: pos=%d tex=%d", g_posAttr, g_texAttr);
 
     GLint linkStatus = 0;
@@ -1322,6 +1354,26 @@ static void* DecoderThreadFunc(void* arg) {
                         RGBABuffer* buf = g_framePool.getWriteBuffer(w, h);
                         buf->packetBytes = packet->size;
                         buf->isKeyframe = isKey;
+                        {
+                            /* What the stream says about its colours (GAL_PLAYER_COLOR). */
+                            bool spaceUnset = frame->colorspace == AVCOL_SPC_UNSPECIFIED ||
+                                              frame->colorspace == AVCOL_SPC_RESERVED;
+                            buf->colorFull = frame->color_range == AVCOL_RANGE_JPEG;
+                            buf->colorBt709 = frame->colorspace == AVCOL_SPC_BT709 ||
+                                              (spaceUnset && h >= 720);
+                            static int s_lastRange = -1, s_lastSpace = -1, s_lastH = -1;
+                            if ((int)frame->color_range != s_lastRange ||
+                                (int)frame->colorspace != s_lastSpace || h != s_lastH) {
+                                s_lastRange = (int)frame->color_range;
+                                s_lastSpace = (int)frame->colorspace;
+                                s_lastH = h;
+                                LOG("colour: stream range %d, matrix %d (%dx%d); drawn as %s",
+                                    s_lastRange, s_lastSpace, w, h,
+                                    !g_colorAuto ? "full-range BT.601 (GAL_PLAYER_COLOR=old)" :
+                                    buf->colorFull ? (buf->colorBt709 ? "full-range BT.709" : "full-range BT.601") :
+                                                     (buf->colorBt709 ? "limited-range BT.709" : "limited-range BT.601"));
+                            }
+                        }
                         
                         uint8_t* dstY = buf->pixels;
                         uint8_t* dstU = dstY + (w * h);
@@ -1542,7 +1594,7 @@ static void load_player_config() {
                 }
             } else if (strcmp(key, "GAL_SECONDARY_MARGINS") == 0) {
                 int w = 0, h = 0;
-                if (sscanf(val, "%dx%d", &w, &h) == 2 && w >= 0 && w <= 400 && h >= 0 && h <= 240) {
+                if (sscanf(val, "%dx%d", &w, &h) == 2 && w >= 0 && w <= 640 && h >= 0 && h <= 360) {
                     g_marginW = w & ~1;
                     g_marginH = h & ~1;
                 }
@@ -1556,6 +1608,10 @@ static void load_player_config() {
                 /* Wide enough for any window of 320..1920 by 160..1080. */
                 int e4 = atoi(val);
                 if (e4 >= 1000 && e4 <= 80000) g_pixelAspectE4 = e4;
+            } else if (strcmp(key, "GAL_PLAYER_COLOR") == 0) {
+                /* auto (default): as the stream says; old: full-range BT.601 as before. */
+                if (strcmp(val, "old") == 0) g_colorAuto = false;
+                else if (strcmp(val, "auto") == 0) g_colorAuto = true;
             } else if (strcmp(key, "GAL_PLAYER_NVSS_OUTPUT") == 0) {
                 int o = atoi(val);
                 if (o == 0 || o == 1) g_nvssOutput = (unsigned)o;
@@ -1589,7 +1645,7 @@ static void load_player_config() {
     env_val = getenv("GAL_SECONDARY_MARGINS");
     if (env_val) {
         int w = 0, h = 0;
-        if (sscanf(env_val, "%dx%d", &w, &h) == 2 && w >= 0 && w <= 400 && h >= 0 && h <= 240) {
+        if (sscanf(env_val, "%dx%d", &w, &h) == 2 && w >= 0 && w <= 640 && h >= 0 && h <= 360) {
             g_marginW = w & ~1;
             g_marginH = h & ~1;
         }
@@ -2024,6 +2080,8 @@ int main(int argc, char* argv[]) {
 
             int w = dispBuf->width;
             int h = dispBuf->height;
+            bool colorFull = !g_colorAuto || dispBuf->colorFull;
+            bool colorBt709 = g_colorAuto && dispBuf->colorBt709;
             if (firstFrame || w != prevFbW || h != prevFbH) fit_frame(w, h);
 
             uint8_t* pY = dispBuf->pixels;
@@ -2032,6 +2090,16 @@ int main(int argc, char* argv[]) {
 
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g_texY);
+            {
+                /* NEAREST only when every window pixel is one decoded pixel (fit_frame). */
+                static GLint s_lumaFilter = -1;
+                GLint want = g_lumaExact ? GL_NEAREST : GL_LINEAR;
+                if (want != s_lumaFilter) {
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, want);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, want);
+                    s_lumaFilter = want;
+                }
+            }
             if (firstFrame || w != prevFbW || h != prevFbH) {
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, w, h, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, pY);
             } else {
@@ -2073,6 +2141,14 @@ int main(int argc, char* argv[]) {
                 glUniform1i(g_texLocY, 0);
                 glUniform1i(g_texLocU, 1);
                 glUniform1i(g_texLocV, 2);
+                if (colorFull)
+                    glUniform3f(g_rangeLoc, 0.0f, 1.0f, 1.0f);
+                else /* limited: Y 16-235 and Cb/Cr 16-240 stretched to 0-255 */
+                    glUniform3f(g_rangeLoc, 16.0f / 255.0f, 255.0f / 219.0f, 255.0f / 224.0f);
+                if (colorBt709)
+                    glUniform4f(g_matrixLoc, 1.5748f, 0.18732f, 0.46812f, 1.8556f);
+                else
+                    glUniform4f(g_matrixLoc, 1.402f, 0.34414f, 0.71414f, 1.772f);
 
                 glVertexAttribPointer(g_posAttr, 3, GL_FLOAT, GL_FALSE, 0, fittedVertices);
                 glVertexAttribPointer(g_texAttr, 2, GL_FLOAT, GL_FALSE, 0, croppedTexCoords);

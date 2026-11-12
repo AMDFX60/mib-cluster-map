@@ -306,8 +306,9 @@ static void load_environment(void)
     value = getenv("GAL_SECONDARY_MARGINS");
     if (value != NULL && value[0] != 0) {
         unsigned w, h;
-        /* Even, and leaving at least half the frame. */
-        if (sscanf(value, "%ux%u", &w, &h) == 2 && w <= 400u && h <= 240u) {
+        /* Even, and at most half of a 1280x720 frame; gal_hook_init checks
+         * them again against the frame actually used. */
+        if (sscanf(value, "%ux%u", &w, &h) == 2 && w <= 640u && h <= 360u) {
             g_config.margin_width = w & ~1u;
             g_config.margin_height = h & ~1u;
         }
@@ -322,6 +323,10 @@ static void load_environment(void)
             gal_hook_logf("event=config.crop result=invalid top=%s bottom=%s",
                           top_value != NULL ? top_value : "0",
                           bottom_value != NULL ? bottom_value : "0");
+        } else if ((crop_top != 0u || crop_bottom != 0u) && g_config.width == 1280u) {
+            /* The crop is for the 800x480 frame; 720p uses its margins 1:1. */
+            gal_hook_logf("event=config.crop result=ignored reason=frame_1280x720 top=%u bottom=%u",
+                          crop_top, crop_bottom);
         } else if (crop_top != 0u || crop_bottom != 0u) {
             /* The player crops the uncropped frame; keep full-frame pixel aspect. */
             g_config.margin_width = 0u;
@@ -572,12 +577,61 @@ int gal_hook_init(const gal_secondary_config *config)
      * the 400x400 attempt went wrong: 400x400 is a possible VISIBLE area
      * inside the coded frame, not a coded-frame size. Outer margins are
      * fixed to zero in this build; UiConfig carries the UI safe area.
+     *
+     * Skoda fork: 1280x720 is allowed too (CLUSTERMAP_720P). The secondary
+     * sink's configuration is copied from the primary's own 1280x720 entry
+     * (the centre screen runs at 720p), the stock renderer never sees the
+     * secondary's configuration, and the player decodes whatever size
+     * arrives. Other projects get 720p and 1080p cluster streams from phones
+     * (kamgurgul/mib2q-carplay, aberbic's Audi altscreen, aa-proxy-rs, and
+     * Google's DHU documents 720p with margins for a cluster). Margins then
+     * leave exactly the window's pixels, shown 1:1 by the player.
      */
-    if (g_config.width != 800u || g_config.height != 480u) {
-        gal_hook_logf("event=config.resolution result=pinned requested=%ux%u using=800x480 reason=cluster_accepts_only_800x480",
+    if (!((g_config.width == 800u && g_config.height == 480u) ||
+          (g_config.width == 1280u && g_config.height == 720u))) {
+        gal_hook_logf("event=config.resolution result=pinned requested=%ux%u using=800x480 reason=only_800x480_or_1280x720",
                       g_config.width, g_config.height);
         g_config.width = 800u;
         g_config.height = 480u;
+    }
+    if (g_config.margin_width > g_config.width / 2u ||
+        g_config.margin_height > g_config.height / 2u) {
+        gal_hook_logf("event=config.margins result=dropped margins=%ux%u frame=%ux%u reason=more_than_half_the_frame",
+                      g_config.margin_width, g_config.margin_height,
+                      g_config.width, g_config.height);
+        g_config.margin_width = 0u;
+        g_config.margin_height = 0u;
+    }
+    /*
+     * At 1280x720 the phone draws the window's own pixels (1010x376 inside
+     * 270x344 margins on the Skoda), where at 800x480 it drew a band of the
+     * window's shape (800x298) that the player enlarged. DPI and insets are
+     * set for that band, so they are scaled by window / band here (1.2625 on
+     * 1010x376: DPI 110 becomes 139): the map keeps its scale and the turn
+     * card its place, and every line is drawn at the cockpit's resolution.
+     * The insets are taken to count in the visible area, as the content
+     * insets of the phone's display; the event below says what was sent.
+     */
+    if (g_config.width == 1280u && g_config.height == 720u &&
+        g_config.pixel_aspect_ratio_e4 <= 10000u && g_config.dpi <= 0x3fffu &&
+        g_config.insets_top <= 0x3fffu && g_config.insets_bottom <= 0x3fffu &&
+        g_config.insets_left <= 0x3fffu && g_config.insets_right <= 0x3fffu) {
+        unsigned vw = 1280u - g_config.margin_width;
+        unsigned vh = 720u - g_config.margin_height;
+        unsigned factor = (vw * 480u > vh * 800u) ?
+            (vw * 10000u + 400u) / 800u : (vh * 10000u + 240u) / 480u;
+        unsigned dpi = g_config.dpi;
+        unsigned top = g_config.insets_top, bottom = g_config.insets_bottom;
+        unsigned left = g_config.insets_left, right = g_config.insets_right;
+        g_config.dpi = (dpi * factor + 5000u) / 10000u;
+        g_config.insets_top = (top * factor + 5000u) / 10000u;
+        g_config.insets_bottom = (bottom * factor + 5000u) / 10000u;
+        g_config.insets_left = (left * factor + 5000u) / 10000u;
+        g_config.insets_right = (right * factor + 5000u) / 10000u;
+        gal_hook_logf("event=config.hd_frame result=scaled frame=1280x720 visible=%ux%u factor_e4=%u dpi=%u->%u insets=%u,%u,%u,%u->%u,%u,%u,%u",
+                      vw, vh, factor, dpi, g_config.dpi, top, bottom, left, right,
+                      g_config.insets_top, g_config.insets_bottom,
+                      g_config.insets_left, g_config.insets_right);
     }
     /*
      * Width and height are pinned above and can no longer be zero, so this

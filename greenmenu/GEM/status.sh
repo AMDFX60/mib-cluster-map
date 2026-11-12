@@ -13,7 +13,9 @@ UNIT_CONF=/mnt/app/eso/lib/gal_dualscreen/gal_dualscreen.conf
 if [ -r "$UNIT_CONF" ]; then
     w=`sed -n 's/^GAL_PLAYER_WINDOW=\([0-9]*x[0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
     m=`sed -n 's/^GAL_SECONDARY_MARGINS=\([0-9]*x[0-9]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
-    if [ "`sed -n 's/^CLUSTERMAP_FULL_FRAME=\([01]\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`" = 1 ]; then
+    if [ "`sed -n 's/^CLUSTERMAP_720P=\([01]\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`" = 1 ]; then
+        echo "  window ${w:-unknown}, picture: 720p 1:1 (test, margins ${m:-unknown})"
+    elif [ "`sed -n 's/^CLUSTERMAP_FULL_FRAME=\([01]\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`" = 1 ]; then
         echo "  window ${w:-unknown}, sharper map: ON (whole frame)"
     else
         echo "  window ${w:-unknown}, sharper map: off (margins ${m:-unknown})"
@@ -24,6 +26,7 @@ if [ -r "$UNIT_CONF" ]; then
         p=`sed -n 's/^CLUSTERMAP_CARD_POSITION=\([a-z]*\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
         case "${p:-bottom}" in
             top|bottom) p="at the $p" ;;
+            lower)      p="hidden, car lower" ;;
             *)          p="moved" ;;
         esac
         echo "  turn card: $p (test), insets ${i:-unknown}"
