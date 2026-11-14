@@ -181,20 +181,24 @@ The cluster only shows the head unit's map window at that window's own size:
 800×480 on the Golf, 1010×376 on some SEAT and Skoda clusters. A window of
 another size arrives as coloured stripes. The installer reads the size from
 the display manager (`dmdt gd`, window 33) and opens the player's window at
-it. Android Auto's cluster video is always 800×480, so where the window has
-another shape the phone is asked to leave margins (0×182 for 1010×376) and
-the player scales the rest to fill the window. If the size cannot be read, the card's `GAL_PLAYER_WINDOW`
-is used when set (this fork ships `GAL_PLAYER_WINDOW=1010x376`), otherwise the
-usual size for the make (1010×376 on SEAT and Skoda, 800×480 on VW and
-anything else). The install
+it. Android Auto's cluster video has a fixed size (1280×720 with this fork's
+720p picture, 800×480 with `CLUSTERMAP_720P=0`), so where the window has
+another shape the phone is asked to leave margins (270×344 or 0×182 for
+1010×376) and the player shows the rest in the window. If the size cannot be
+read, the card's `GAL_PLAYER_WINDOW` is used when set (this fork ships
+`GAL_PLAYER_WINDOW=1010x376`), then the size the player found on this cockpit
+at an earlier start, otherwise the usual size for the make (1010×376 on SEAT
+and Skoda, 800×480 on VW and anything else). The install
 output and the unit's copy of the settings (`GAL_PLAYER_WINDOW`,
 `GAL_SECONDARY_MARGINS`) show what was chosen.
 
 The display manager only lists window 33 once the cockpit has shown it, so
 the installer can be left with a guess. The player therefore reads the size
 again each time it starts. If it differs, it opens the window at the real size
-and corrects the two settings for the next start. Until then the picture can
-have black bars.
+and corrects the two settings for the next start, and saves the size for the
+next install. Until then the picture can have black bars. (Up to 1.3.0 that
+correction never ran: its script could not find its own folder, upstream
+#95.)
 
 **Upstream's sharper map (not in this fork's menu any more).** The margins cost sharpness: on 1010×376 only 298 of the frame's 480 lines
 carry map, enlarged to fill the window. `CLUSTERMAP_FULL_FRAME=1` asks the

@@ -60,6 +60,15 @@ for the Skoda cockpit.
 
 ## Changelog
 
+### 1.4.0 (compared with 1.3, in test)
+
+- **Window correction works** (from upstream, #95): when the cockpit's map
+  window is not the size the installer chose, the player's correction script
+  could not find its own folder and never ran. It now corrects the settings
+  and saves the size, which the next install uses when the display manager
+  does not list the window. No change on the Superb, whose 1010×376 is set in
+  `GAL_PLAYER_WINDOW`.
+
 ### 1.3.0 (compared with 1.2)
 
 - **720p picture shown 1:1.** The phone sends 1280×720 with margins that

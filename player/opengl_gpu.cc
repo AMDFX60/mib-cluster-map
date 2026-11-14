@@ -67,8 +67,10 @@ static int   g_ffmpegThreadCount    = 2;      // Default: 2 worker threads for m
  * phone-side timeout of about 300 ms: 3.3 fps with 313 ms ACK latency, seen on
  * the car 2026-09-16 (run 3). AV_CODEC_FLAG_LOW_DELAY makes FFmpeg skip frame
  * threading altogether; slice threading is declared too so the startup log
- * does not claim otherwise. Decode at 800x480 measured about 1 ms a frame, so
- * frame-parallel decode bought nothing. Not configurable: this is a fix, and
+ * does not claim otherwise. At 800x480 decode took about 1 ms a frame; the
+ * 720p picture takes 28 to 53 ms with NEON (Superb, 2026-11-12), so decode is
+ * now the limit, but frame threading would still bring the stall back. Not
+ * configurable: this is a fix, and
  * the old GAL_PLAYER_THREAD_TYPE / GAL_PLAYER_LOW_DELAY knobs (conf, env and
  * --thread-type / --low-delay flags) could only put the stall back.
  */

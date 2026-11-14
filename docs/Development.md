@@ -178,7 +178,7 @@ first build takes 30–60 minutes.
 ./build_local.sh toolchain  # once: the toolchain image, from a pinned commit of its repository
 ./build_local.sh            # hook, helper, FFmpeg, player, dist/sdcard and the release zip
 ./build_local.sh player     # only the player; also: hook, package
-RELEASE_VERSION=v1.1.1-beta8-skoda ./build_local.sh   # name the package (default: the commit)
+RELEASE_VERSION=v1.4.0-beta1-skoda ./build_local.sh   # name the package (default: the commit)
 ```
 
 `toolchain` is the same build as `git clone
@@ -187,12 +187,17 @@ build 8.5` there, which still works on macOS and Linux. If ftp.gnu.org refuses
 connections, build from a clone with https://mirrors.kernel.org/gnu/ in its
 Dockerfile (the checksums are pinned).
 
-FFmpeg 6.1.5 is downloaded, checked and built on first use.
+FFmpeg 6.1.5 is downloaded, checked and built on first use, with NEON for the
+Cortex-A9 but without the NEON routines that access memory misaligned
+(`tools/ffmpeg_qnx_aligned.sh`; this unit's QNX kernel stops them with
+SIGBUS).
 
 The menu screen only reaches the unit with the software update when its
-version there changes, and that version is the digits of the package name: a
-new package needs a name whose digits make a larger number than the installed
-one (`v1.1.1-beta7` is 1117).
+version there is higher than the installed one. `tools/make_metainfo.py`
+derives it from the package name: `X.Y.Z-betaN` counts as
+X·10000 + Y·1000 + Z·100 + N and a release as N = 99, whatever follows
+(`-skoda`). So `v1.3.0` is 13099 and `v1.4.0-beta1` 14001: just count the
+version up.
 
 **Windows:** run the same commands from Git Bash, with Docker Desktop (WSL 2)
 running. `build_local.sh` notices and works around what differs there: it
