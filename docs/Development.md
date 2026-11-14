@@ -44,10 +44,27 @@ These shaped the design; changing them has broken things before.
   `/tmp/gal_ack.sock`). Acknowledging on arrival lets the phone raise its
   bitrate past what the unit can show: buffers overflow, keyframes drop, the
   picture breaks into green blocks.
+- **Exactly one acknowledgement per frame, never a guess.** The player
+  ACKs every frame: when drawn, when a newer one replaces it before it is
+  drawn, or at once when it gives no picture (no keyframe yet, the warm-up
+  frame, a decode error). Up to 1.4.0-beta1 the hook instead returned the
+  credit of everything beyond four outstanding frames as "presumed
+  dropped"; with the 720p decoder as the slowest step those frames were
+  waiting in the loopback socket, so the phone kept a queue of 2–3 s there.
+  Only a leak is still caught: after 3 s of quiet with the player idle,
+  outstanding credit beyond one frame goes back (`ack.leak_released`). The
+  window itself (`max_unacked`, sink +0x1c) is 4 (`GAL_SECONDARY_MAX_UNACKED`);
+  every frame in flight waits in front of the decoder, so it bounds the
+  delay. `ack.latency` in the hook log gives hook-to-ACK time once a minute:
+  34 to 213 ms on average on the Superb (1.4.0-beta2), about 4 × the decode
+  time once the decoder is the limit, against about 2 s with 1.3.0.
 - **No frame-parallel decoding.** FFmpeg frame threading holds each frame
   until the next packet arrives, while the phone waits for the
   acknowledgement before sending it: a deadlock that ends at the phone's
   ~300 ms timeout, so 3.3 fps. The player uses low-delay, slice threading.
+  For the same reason the hook ends each frame with an access unit
+  delimiter: FFmpeg's H.264 parser only knows a picture is complete when the
+  next one starts, and the delimiter is that start.
 - **TCP, not a Unix socket.** On QNX 6.5 a Unix socket has a fixed 5 KB
   buffer that `setsockopt` ignores; a 140 KB keyframe needs 27 round trips and
   the stream falls to 3–4 fps. TCP loopback takes 2 MB buffers.
@@ -178,7 +195,7 @@ first build takes 30–60 minutes.
 ./build_local.sh toolchain  # once: the toolchain image, from a pinned commit of its repository
 ./build_local.sh            # hook, helper, FFmpeg, player, dist/sdcard and the release zip
 ./build_local.sh player     # only the player; also: hook, package
-RELEASE_VERSION=v1.4.0-beta1-skoda ./build_local.sh   # name the package (default: the commit)
+RELEASE_VERSION=v1.4.0-skoda ./build_local.sh   # name the package (default: the commit)
 ```
 
 `toolchain` is the same build as `git clone
@@ -196,7 +213,7 @@ The menu screen only reaches the unit with the software update when its
 version there is higher than the installed one. `tools/make_metainfo.py`
 derives it from the package name: `X.Y.Z-betaN` counts as
 X·10000 + Y·1000 + Z·100 + N and a release as N = 99, whatever follows
-(`-skoda`). So `v1.3.0` is 13099 and `v1.4.0-beta1` 14001: just count the
+(`-skoda`). So `v1.4.0-beta2` is 14002 and `v1.4.0` 14099: just count the
 version up.
 
 **Windows:** run the same commands from Git Bash, with Docker Desktop (WSL 2)

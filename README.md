@@ -42,8 +42,11 @@ for the Skoda cockpit.
   view like its own navigation.
 - **Sharp 720p picture, 1:1.** The phone draws exactly the cockpit window's
   1010×376 pixels, and they are shown without any stretching or scaling.
-- **Smooth.** Decoded with the Tegra 3's NEON unit: 17 to 28 pictures a
+- **Smooth.** Decoded with the Tegra 3's NEON unit: 17 to 30 pictures a
   second in the car (the phone sends at most 30).
+- **In step with the centre screen.** The cockpit map runs 0.03 to 0.2
+  seconds behind the phone (measured in the car), not about 2 seconds as
+  up to 1.3.
 - **True colours.** The picture is converted the way the phone sends it, with
   deep blacks and full contrast.
 - **Turn card your way.** Hidden by default, so the map is free and the
@@ -60,8 +63,23 @@ for the Skoda cockpit.
 
 ## Changelog
 
-### 1.4.0 (compared with 1.3, in test)
+### 1.4.0 (compared with 1.3)
 
+- **Cockpit map no longer about 2 seconds behind the centre screen.**
+  Measured on the Superb: 34 to 213 ms on average per minute, at most
+  308 ms, with no fewer pictures a second than before (17 to 30).
+  The phone sends a cluster picture only while it has ACK credit, and the
+  player ACKs a picture once it is drawn. The hook also returned the credit
+  of pictures it took for dropped whenever more than four were outstanding,
+  but since the 720p decoder became the slowest step those pictures were
+  only waiting in the loopback socket, so the phone kept filling that queue
+  (1.3.0 car log: 79 such credits in 3.5 minutes, about 13 real drops). Now
+  the player ACKs every picture itself (drawn, replaced before it was drawn,
+  or not decodable) and the hook no longer guesses; the phone may have 4
+  pictures in flight instead of 8 (`GAL_SECONDARY_MAX_UNACKED`); and each
+  picture is passed to the decoder as soon as it has arrived, not when the
+  next one starts. The hook log's `ack.latency` line gives the delay once a
+  minute, the player log's `acks:` line how the pictures were acknowledged.
 - **Window correction works** (from upstream, #95): when the cockpit's map
   window is not the size the installer chose, the player's correction script
   could not find its own folder and never ran. It now corrects the settings
@@ -175,8 +193,9 @@ to the card's settings when you install again.
 | Install by software update, green menu | Car-tested |
 | Android Auto map, with and without a route; automatic day/night | Car-tested |
 | 720p picture 1:1, colours | Car-tested: sharper |
-| NEON decoder (smoothness) | Car-tested: 17 to 28 pictures a second instead of 9 to 10 |
-| Picture handover without a copy in the decoder (1.3.0) | Not yet car-tested |
+| NEON decoder (smoothness) | Car-tested: 17 to 30 pictures a second instead of 9 to 10 |
+| Cockpit delay behind the phone (1.4.0) | Car-tested: 0.03 to 0.2 s on average instead of about 2 s |
+| Picture handover without a copy in the decoder (1.3.0) | Car-tested: runs fine; its own gain not measured separately |
 | Turn card hidden, top right | Car-tested |
 | Turn card top left, keeping the choice across installs | Not yet car-tested |
 | Map size switch | Not yet car-tested |
@@ -210,6 +229,7 @@ needs editing. The ones this fork adds:
 | `GAL_SECONDARY_DPI` | 110 | lower draws the map, its text and the card smaller |
 | `GAL_PLAYER_COLOR` | auto | `old` for the colours before 1.3 |
 | `GAL_PLAYER_NEON` | 1 | 0 decodes without NEON (slower) |
+| `GAL_SECONDARY_MAX_UNACKED` | 4 | 3 for a little less delay; 8 as up to 1.3 |
 
 All settings are in the [Install guide](docs/Install.md#settings).
 
@@ -218,19 +238,19 @@ All settings are in the [Install guide](docs/Install.md#settings).
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.3.0-skoda ./build_local.sh
+RELEASE_VERSION=v1.4.0-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
 replaces the green menu only for a higher version number, which
 `RELEASE_VERSION` gives: `X.Y.Z-betaN` counts as X·10000 + Y·1000 + Z·100 + N
-and a release as N = 99 (`v1.3.0-beta3` is 13003, `v1.3.0` 13099),
+and a release as N = 99 (`v1.4.0-beta2` is 14002, `v1.4.0` 14099),
 whatever follows (`-skoda`). The first run builds FFmpeg with NEON once.
 Details are in [Development](docs/Development.md) and at the top of
 `build_local.sh`.
 
-Releases are named `mib-cluster-map_v1.3.0-skoda.zip`, test versions
-`mib-cluster-map_v1.3.0-betaN-skoda.zip`.
+Releases are named `mib-cluster-map_v1.4.0-skoda.zip`, test versions
+`mib-cluster-map_v1.4.0-betaN-skoda.zip`.
 
 ## Reporting a problem
 

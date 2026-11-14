@@ -226,8 +226,27 @@ struct FramePool {
     int writeSlot;
     int readySlot;
     int readSlot;
+    /*
+     * Pictures given back without being drawn (a newer one replaced them
+     * first). Each still owes the phone its ACK: whoever holds g_frameMutex
+     * takes the count (takeUnshown) and sends that many after unlocking.
+     * The hook used to guess these drops from how many frames were
+     * outstanding, and that guess also returned the credit of frames still
+     * on their way to the player, which let a queue of 2-3 s build up in
+     * the loopback socket (1.4.0-beta2).
+     */
+    unsigned unshown;
 
-    FramePool() : writeSlot(0), readySlot(-1), readSlot(-1) {}
+    FramePool() : writeSlot(0), readySlot(-1), readSlot(-1), unshown(0) {}
+
+    /* Give a slot's picture back; count it if it was a stream picture never drawn. */
+    void dropUnshown(int slot) {
+        if (slot < 0) return;
+        if (slots[slot].hasFrame()) ++unshown;
+        slots[slot].dropFrame();
+    }
+
+    unsigned takeUnshown() { unsigned n = unshown; unshown = 0; return n; }
 
     RGBABuffer* getWriteBuffer(int w, int h, int cw, int ch) {
         slots[writeSlot].ensureCapacity(w, h, cw, ch);
@@ -243,7 +262,7 @@ struct FramePool {
     void publishWrite() {
         /* A picture published but never shown is not going to be: give its
          * buffer back to the decoder now. */
-        if (readySlot >= 0) slots[readySlot].dropFrame();
+        dropUnshown(readySlot);
         readySlot = writeSlot;
         writeSlot = (writeSlot + 1) % kBufferPoolSize;
         if (writeSlot == readSlot) {
@@ -253,7 +272,9 @@ struct FramePool {
 
     RGBABuffer* getDisplayBuffer() {
         if (readySlot >= 0) {
-            if (readSlot >= 0 && readSlot != readySlot) slots[readSlot].dropFrame();
+            /* Normally already copied and given back (takeFrame); still
+             * holding its picture only if the render loop skipped it. */
+            if (readSlot != readySlot) dropUnshown(readSlot);
             readSlot = readySlot;
             readySlot = -1;
         }
@@ -827,6 +848,18 @@ static void nvss_disable_for_boot(const char*) {}
 #endif
 
 static void write_ack();
+static void write_acks(unsigned n);
+/*
+ * Every picture the phone sends gets exactly one ACK (1.4.0-beta2): when it
+ * is drawn, when a newer one replaces it before it is drawn, or at once when
+ * it gives no picture (no keyframe yet, the warm-up picture, a decode error).
+ * The phone keeps only as many pictures in flight as it has ACK credit, so
+ * this is what keeps the delay to the cockpit short. Totals for the
+ * once-a-minute "acks:" line; a sample lost in a race only shifts it.
+ */
+static volatile uint32_t g_ackReplaced = 0, g_ackNoPicture = 0;
+static void ack_no_picture() { g_ackNoPicture++; write_ack(); }
+static void ack_replaced(unsigned n) { if (n) { g_ackReplaced += n; write_acks(n); } }
 
 static void crash_signal_handler(int sig) {
     fprintf(stderr, "\n[stream-player CRASH] Caught fatal signal %d! Emergency restoring the stock cluster map...\n", sig);
@@ -1371,7 +1404,7 @@ static void* DecoderThreadFunc(void* arg) {
                     /* Hardware path: the parser's access units go to NvSS,
                      * which draws them on the layer itself. */
                     if (!hasDecodedKeyframe) {
-                        if (!parser->key_frame) continue;
+                        if (!parser->key_frame) { ack_no_picture(); continue; }
                         hasDecodedKeyframe = true;
                         LOG("decoder: first keyframe for the hardware decoder t=%llu.%03llu", T_ARGS(now_us()));
                     }
@@ -1395,12 +1428,16 @@ static void* DecoderThreadFunc(void* arg) {
                 if (packet->size > 0) {
                     uint64_t t_dec_start = now_us();
                     int ret = avcodec_send_packet(codecCtx, packet);
-                    if (ret < 0) continue;
+                    /* Each packet is one picture the phone sent and waits to
+                     * have ACKed; one that gives none is ACKed here. */
+                    if (ret < 0) { ack_no_picture(); continue; }
+                    int pictures = 0;
 
                     while (ret >= 0 && g_running) {
                         ret = avcodec_receive_frame(codecCtx, frame);
                         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
                         if (ret < 0) break;
+                        ++pictures;
 
                         uint64_t dec_dur = now_us() - t_dec_start;
 
@@ -1418,6 +1455,7 @@ static void* DecoderThreadFunc(void* arg) {
                         if (!hasDecodedKeyframe) {
                             if (!isKey) {
                                 av_frame_unref(frame);
+                                ack_no_picture();
                                 continue;
                             }
                             hasDecodedKeyframe = true;
@@ -1437,6 +1475,7 @@ static void* DecoderThreadFunc(void* arg) {
                         if (!hasRenderedWarmupFrame) {
                             hasRenderedWarmupFrame = true;
                             av_frame_unref(frame);
+                            ack_no_picture();
                             LOG("decoder: warmup frame consumed; rendering next decoded frame.");
                             continue;
                         }
@@ -1508,11 +1547,14 @@ static void* DecoderThreadFunc(void* arg) {
                         if (!buf->frame) {
                             pthread_mutex_unlock(&g_frameMutex);
                             av_frame_unref(frame);
+                            ack_no_picture();
                             continue;
                         }
+                        if (buf->hasFrame()) g_framePool.unshown++;
                         buf->dropFrame();
                         av_frame_move_ref(buf->frame, frame);
                         g_framePool.publishWrite();
+                        unsigned replaced = g_framePool.takeUnshown();
                         g_newFrameReady = true;
                         g_decodedFrameCount++;
                         g_lastDecodeDurationUs = dec_dur;
@@ -1521,6 +1563,7 @@ static void* DecoderThreadFunc(void* arg) {
 
                         pthread_cond_signal(&g_frameCond);
                         pthread_mutex_unlock(&g_frameMutex);
+                        ack_replaced(replaced);
 
                         av_frame_unref(frame);
 
@@ -1539,6 +1582,7 @@ static void* DecoderThreadFunc(void* arg) {
                             }
                         }
                     }
+                    if (pictures == 0) ack_no_picture();
                 }
             }
         }
@@ -1819,7 +1863,10 @@ static bool g_noAck = false;
  * frame drawn after 1 s, which is why it came 1.2-1.5 s after the spawn.)
  * A failed connect is retried on the next ACK.
  */
-static void ack_connect() {
+/* The render thread ACKs drawn pictures, the decoder thread the others. */
+static pthread_mutex_t g_ackMutex = PTHREAD_MUTEX_INITIALIZER;
+
+static void ack_connect_locked() {
     if (g_ack_fd >= 0 || g_noAck) return;
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0) return;
@@ -1837,22 +1884,40 @@ static void ack_connect() {
     LOG("ack: connected t=%llu.%03llu", T_ARGS(now_us()));
 }
 
-static void write_ack() {
-    ack_connect();
-    if (g_ack_fd >= 0) {
-        char b = 1;
+static void ack_connect() {
+    pthread_mutex_lock(&g_ackMutex);
+    ack_connect_locked();
+    pthread_mutex_unlock(&g_ackMutex);
+}
+
+/* One byte per picture; the hook counts bytes. */
+static void write_acks(unsigned n) {
+    if (n == 0) return;
+    pthread_mutex_lock(&g_ackMutex);
+    ack_connect_locked();
+    while (n > 0 && g_ack_fd >= 0) {
+        char b[16];
+        memset(b, 1, sizeof(b));
+        size_t k = n < sizeof(b) ? n : sizeof(b);
         /* MSG_NOSIGNAL: once gal is gone a late ACK must fail, not raise
          * SIGPIPE and kill the player before it restores the Kombi map. */
-        int n = send(g_ack_fd, &b, 1, MSG_NOSIGNAL);
-        if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+        ssize_t sent = send(g_ack_fd, b, k, MSG_NOSIGNAL);
+        if (sent > 0) { n -= (unsigned)sent; continue; }
+        if (sent < 0 && errno == EINTR) continue;
+        if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
             close(g_ack_fd);
             g_ack_fd = -1;
         }
+        break;
     }
+    pthread_mutex_unlock(&g_ackMutex);
 }
+
+static void write_ack() { write_acks(1); }
 #else
 static void ack_connect() {}
 static void write_ack() {}
+static void write_acks(unsigned) {}
 #endif
 
 /*
@@ -2217,12 +2282,14 @@ int main(int argc, char* argv[]) {
         uint64_t frameStartUs = now_us();
 
         RGBABuffer* dispBuf = g_framePool.getDisplayBuffer();
+        unsigned replaced = g_framePool.takeUnshown();
         /*
          * The decoder never writes the slot being shown (publishWrite skips
          * readSlot), so the copy and upload below run without the lock and
          * the decoder can hand over its next picture meanwhile.
          */
         pthread_mutex_unlock(&g_frameMutex);
+        ack_replaced(replaced);
         if (dispBuf && (dispBuf->pixels || dispBuf->hasFrame())) {
             static uint64_t s_lastRenderUs = 0;
             bool isIdle = (g_idleMaxBytes > 0 && dispBuf->packetBytes > 0 &&
@@ -2239,7 +2306,9 @@ int main(int argc, char* argv[]) {
             /* Cut the decoder's picture to the window (it handed it over by
              * reference) and take a brightness sample now and then. */
             uint64_t t_copy_start = now_us();
-            if (dispBuf->takeFrame()) {
+            /* A new picture is drawn this pass; only that is ACKed below. */
+            bool fresh = dispBuf->takeFrame();
+            if (fresh) {
                 if ((g_drawnCount & 31u) == 0) {
                     const uint8_t* lumaY = dispBuf->pixels;
                     int lw = dispBuf->width, lh = dispBuf->height;
@@ -2250,7 +2319,11 @@ int main(int argc, char* argv[]) {
                 }
                 g_tCopyUs += (uint32_t)(now_us() - t_copy_start);
             }
-            if (!dispBuf->pixels) continue;
+            if (!dispBuf->pixels) {
+                /* No memory for it: takeFrame gave the picture back undrawn. */
+                ack_no_picture();
+                continue;
+            }
 
             int w = dispBuf->width;
             int h = dispBuf->height;
@@ -2352,7 +2425,7 @@ int main(int argc, char* argv[]) {
                     LOGE("render: EGL_CONTEXT_LOST (display power down or surface invalidated)");
                 }
             }
-            write_ack();
+            if (fresh) write_ack();
             {
                 uint64_t t_end = now_us();
                 g_tDrawUs += (uint32_t)(t_end - t_draw_start);
@@ -2398,7 +2471,7 @@ int main(int argc, char* argv[]) {
             }
             glfwSwapBuffers(g_glfwWindow);
             glfwPollEvents();
-            write_ack();
+            if (fresh) write_ack();
 #endif
         }
 
@@ -2445,6 +2518,15 @@ int main(int argc, char* argv[]) {
                     drawn ? dCopy / 1000.0 / drawn : 0.0,
                     drawn ? dUp / 1000.0 / drawn : 0.0, drawn ? dDraw / 1000.0 / drawn : 0.0,
                     g_tFrameMaxUs / 1000.0, cpuUs * 100.0 / minuteUs);
+                {
+                    /* One ACK per picture the phone sent (1.4.0-beta2). */
+                    static uint32_t s_rep0 = 0, s_nop0 = 0;
+                    uint32_t rep = g_ackReplaced, nop = g_ackNoPicture;
+                    LOG("acks: %u drawn, %u replaced before drawing, %u without a picture in the last minute",
+                        drawn, rep - s_rep0, nop - s_nop0);
+                    s_rep0 = rep;
+                    s_nop0 = nop;
+                }
                 g_tDecodeMaxUs = 0;
                 g_tFrameMaxUs = 0;
                 s_dec0 = g_tDecodeUs; s_copy0 = g_tCopyUs; s_up0 = g_tUploadUs;
