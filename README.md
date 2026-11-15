@@ -63,6 +63,39 @@ for the Skoda cockpit.
 
 ## Changelog
 
+### 1.4.1 (compared with 1.4.0, in test)
+
+- **Decoder faster, most of all on the night map.** Measured on a PC in an
+  ARM emulator that faults misaligned accesses as the unit does: 7 % fewer
+  instructions per picture than 1.4.0 on a day map stream, 14 % on a night
+  map stream, 21 % at a low data rate, with bit-for-bit the same pictures.
+  Two changes:
+  - Six of FFmpeg's NEON routines access memory in a way the head unit's
+    kernel does not allow (1.3.0-beta2 crashed in one at every start), so up
+    to 1.4.0 they ran in slower C code: the deblocking filter across
+    vertical edges, the chroma motion compensation of small blocks and the
+    chroma plane prediction. They are rewritten so that they need no
+    alignment and run in NEON again. The first car test (beta1) ran them
+    for 5 minutes without a fault.
+  - The deblocking filter's set-up, which on ARM FFmpeg does in C for every
+    macroblock (10 to 20 % of the work, more on the dark map), is skipped
+    where nothing would be filtered: the black frame around the map and
+    map areas that move as a whole.
+
+  The car's figures vary more with the map than these gains: decoding took
+  36 to 58 ms a picture within a single 1.4.0 drive. The player log's
+  `health:` line now gives the data rate as well, so minutes with a similar
+  map can be compared.
+- **Test steps in the green menu** (Step 1 to 6; off until chosen, and
+  each can also be set in `gal_dualscreen.conf`): the unit's own video
+  decoder for the cockpit map also at 720p (`GAL_PLAYER_DECODER=hw`), which
+  would allow the phone's full 30 pictures a second, not yet car-tested;
+  recording the start of the cockpit stream with the logs
+  (`GAL_PLAYER_RECORD`), so the decoder can be measured on a PC with the
+  phone's real pictures; and the delay window 3
+  (`GAL_SECONDARY_MAX_UNACKED=3`). "Save logs to SD" notes the active step.
+  An install from the card switches them off again.
+
 ### 1.4.0 (compared with 1.3)
 
 - **Cockpit map no longer about 2 seconds behind the centre screen.**
@@ -181,10 +214,12 @@ unit's own copy of the settings and takes effect after a reboot.
 | Turn card top right | The card in the top right corner with the arrival time under it; the car lower down |
 | Turn card top left | The same space moved right, so the card has room on the left (Maps decides the side) |
 | Test: map smaller / larger, Map size as installed | DPI -10 / +10, or back |
+| Step 1 to Step 6 (1.4.1 tests) | After each: reboot, drive, **Save logs to SD**, which notes the step in `test_step.txt`. 1: software decoder, the start of the cockpit stream recorded with the logs; 2: the unit's own video decoder (not yet car-tested); 3 and 4: the same with the other rectangle or output, for a squeezed or black map; 5: software decoder, delay window 3; 6: back to standard |
 | Save logs to SD | Logs for a bug report |
 
 The turn card setting is kept by the next install; the other entries go back
-to the card's settings when you install again.
+to the card's settings when you install again. The menu runs its scripts from
+the SD card, so leave the card in slot 1.
 
 ## Status on the Superb (`P4526`)
 
@@ -194,6 +229,9 @@ to the card's settings when you install again.
 | Android Auto map, with and without a route; automatic day/night | Car-tested |
 | 720p picture 1:1, colours | Car-tested: sharper |
 | NEON decoder (smoothness) | Car-tested: 17 to 30 pictures a second instead of 9 to 10 |
+| The six NEON routines rewritten (1.4.1) | Car-tested (beta1): no fault in 5 minutes; the gain is within the drive's spread |
+| Deblocking set-up skipped where nothing is filtered (1.4.1-beta2) | PC-tested in an ARM emulator; not yet car-tested |
+| Hardware decoder at 720p (`GAL_PLAYER_DECODER=hw`, a test) | Not yet car-tested |
 | Cockpit delay behind the phone (1.4.0) | Car-tested: 0.03 to 0.2 s on average instead of about 2 s |
 | Picture handover without a copy in the decoder (1.3.0) | Car-tested: runs fine; its own gain not measured separately |
 | Turn card hidden, top right | Car-tested |

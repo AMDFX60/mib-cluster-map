@@ -205,9 +205,42 @@ connections, build from a clone with https://mirrors.kernel.org/gnu/ in its
 Dockerfile (the checksums are pinned).
 
 FFmpeg 6.1.5 is downloaded, checked and built on first use, with NEON for the
-Cortex-A9 but without the NEON routines that access memory misaligned
-(`tools/ffmpeg_qnx_aligned.sh`; this unit's QNX kernel stops them with
-SIGBUS).
+Cortex-A9. This unit's QNX kernel stops a NEON load or store of 16 or 32-bit
+elements that is not aligned to the element size (SIGBUS), which Linux and
+Android allow; six of FFmpeg's H.264 routines make such accesses (1.3.0-beta2
+crashed in one at every start). 1.3.0 to 1.4.0 left them to FFmpeg's C code.
+From 1.4.1 `tools/ffmpeg_patches.py` rewrites them with byte-element
+accesses, which need no alignment (`tools/ffmpeg_qnx_aligned.patch`), and
+fails the build if a scan of the decoder's NEON files still finds one. It
+also applies `tools/ffmpeg_deblock_skip.patch` (1.4.1-beta2): FFmpeg has no
+fast deblocking set-up on ARM (no `h264_loop_filter_strength`), so for every
+macroblock it fills the filter caches and works out the edge strengths in C,
+10 to 20 % of the decoding work, even where nothing is filtered. The patch
+skips that for an inter 16x16 macroblock without coefficients whose
+neighbours move the same way (the black frame around the cockpit map, a map
+moving as a whole), where the strength is 0 on every edge. Both patches
+give FFmpeg's C code's pictures bit for bit.
+
+Where the decoding work goes (`tests/neon/run.sh prof`, map-like streams,
+1.4.1-beta1): entropy decoding and macroblock set-up 21 to 31 %, motion
+compensation and reconstruction 39 to 42 %, deblocking 23 to 36 % (more on
+the dark map), of which the filters themselves (NEON) are only a few per
+cent. Switching deblocking off (`GAL_PLAYER_DEBLOCK=all`) saves 23 to 41 %,
+but the errors then build up from picture to picture until the next
+keyframe, which the phone sends about once a minute: down to 19 dB on the
+night map stream, plainly visible. Not an option.
+
+**Testing the NEON code on a PC:** `tests/neon/run.sh` (docker; about
+15 minutes the first time) builds QEMU for ARM patched to fault misaligned
+accesses as the unit does, and FFmpeg as shipped, as 1.4.0 and as now. It
+decodes test streams made from the cockpit photos with each and compares
+every picture with FFmpeg's C code, and runs FFmpeg's checkasm. FFmpeg as
+shipped must stop in `ff_h264_h_loop_filter_luma_neon` at the same
+instruction as in the car, or the check itself is broken.
+`tests/neon/run.sh prof` counts the instructions per picture (1.4.1-beta2:
+7 % fewer than 1.4.0 on the day map stream, 14 % on the night map, 21 % at a
+low data rate). A stream recorded in the car (`GAL_PLAYER_RECORD`) can be
+put beside the test streams in the volume's `streams` folder.
 
 The menu screen only reaches the unit with the software update when its
 version there is higher than the installed one. `tools/make_metainfo.py`

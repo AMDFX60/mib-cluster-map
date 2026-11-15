@@ -103,22 +103,21 @@ build_player() {
     # made with other settings (the stamp differs) is made again from the same
     # source. tools/qnx_cc.sh forces stddef.h into C files only.
     # The QNX kernel of the unit faults misaligned accesses (1.3.0-beta2 crashed in
-    # a NEON loop filter), so tools/ffmpeg_qnx_aligned.sh leaves out the NEON
-    # routines that make them, and neither FFmpeg (--disable-fast-unaligned)
-    # nor the compiler (-mno-unaligned-access) may make them in C.
-    FFCONF=neon-cortex-a9-aligned-4
+    # a NEON loop filter), so tools/ffmpeg_patches.py rewrites the NEON
+    # routines that made them (up to 1.4.0 they were left out), and neither
+    # FFmpeg (--disable-fast-unaligned) nor the compiler (-mno-unaligned-access)
+    # may make them in C. A new setting always starts from the unpacked source
+    # (the tarball is kept beside it).
+    FFCONF=neon-cortex-a9-aligned-6
     if [ ! -f $FF/libavcodec/libavcodec.a ] || [ "$(cat $FF/.mibcm-ffconf 2>/dev/null)" != "$FFCONF" ]; then
-      if [ ! -f $FF/configure ]; then
-        cd /work/build
-        [ -f ffmpeg-$V.tar.gz ] || curl -fL --retry 3 -o ffmpeg-$V.tar.gz https://ffmpeg.org/releases/ffmpeg-$V.tar.gz
-        echo "$SHA  ffmpeg-$V.tar.gz" | sha256sum -c -
-        mkdir -p $FF && tar xf ffmpeg-$V.tar.gz -C $FF --strip-components=1
-      else
-        (cd $FF && make distclean >/dev/null 2>&1 || true)
-      fi
+      mkdir -p $FF/
+      find $FF/ -mindepth 1 -maxdepth 1 ! -name ffmpeg-$V.tar.gz -exec rm -rf {} +
+      [ -f $FF/ffmpeg-$V.tar.gz ] || curl -fL --retry 3 -o $FF/ffmpeg-$V.tar.gz https://ffmpeg.org/releases/ffmpeg-$V.tar.gz
+      echo "$SHA  $FF/ffmpeg-$V.tar.gz" | sha256sum -c -
+      tar xf $FF/ffmpeg-$V.tar.gz -C $FF/ --strip-components=1
       cd $FF
       cp /work/tools/qnx_cc.sh $FF/qnx_cc.sh && chmod 755 $FF/qnx_cc.sh
-      sh /work/tools/ffmpeg_qnx_aligned.sh $FF
+      python3 /work/tools/ffmpeg_patches.py $FF
       ./configure --cc=$FF/qnx_cc.sh --as=$FF/qnx_cc.sh --ar=$P-ar --ld=$P-gcc --nm=$P-nm --ranlib=$P-ranlib --strip=$P-strip \
         --arch=arm --cpu=cortex-a9 --target-os=qnx --enable-neon --disable-fast-unaligned --disable-debug --enable-cross-compile \
         --extra-cflags="-D_QNX_SOURCE -mfloat-abi=softfp -mfpu=neon -mno-unaligned-access" \
@@ -182,7 +181,7 @@ package() {
   cp "$ROOT/scripts/lib_app_mount.sh" "$ROOT/scripts/hook_status.sh" "$ROOT/scripts/lib_resolve_hook_log.sh" \
      "$ROOT/scripts/lib_unit.sh" "$ROOT/scripts/window_fix.sh" \
      "$ROOT/scripts/lib_cluster_frame.sh" "$ROOT/scripts/card_layout.sh" \
-     "$ROOT/scripts/map_size.sh" \
+     "$ROOT/scripts/map_size.sh" "$ROOT/scripts/player_test.sh" \
      "$ROOT/scripts/lib_keep_settings.sh" "$D/scripts/"
   cp "$ROOT"/greenmenu/GEM/*.sh "$D/GEM/"
   cp "$ROOT/greenmenu/cluster-map.esd" "$S/Custom/GreenMenu/"

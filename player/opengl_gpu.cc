@@ -302,6 +302,16 @@ static uint64_t g_lastDecodeDurationUs = 0;
 static volatile uint32_t g_tDecodeUs = 0, g_tCopyUs = 0, g_tUploadUs = 0, g_tDrawUs = 0;
 static volatile uint32_t g_tDecodeMaxUs = 0, g_tFrameMaxUs = 0;
 static volatile uint32_t g_drawnCount = 0;
+/* Bytes of H.264 the phone sent (1.4.1-beta2): the health line's data rate,
+ * so a minute of busy map can be told from a slower decoder. */
+static volatile uint32_t g_streamBytes = 0;
+/* GAL_PLAYER_RECORD: the first this many seconds of the stream are saved to
+ * RECORD_PATH, for "Save logs to SD" to take along (0 = off, at most 300). */
+static int g_recordSeconds = 0;
+#define RECORD_PATH "/tmp/clustermap-stream.h264"
+/* GAL_PLAYER_NVSS_RECT: how the hardware decoder's rectangles are written,
+ * left/top/right/bottom (NVIDIA's NvRect, the default) or x/y/width/height. */
+static bool g_nvssRectXywh = false;
 static char g_videoSource[512] = "tcp://127.0.0.1:12346";
 
 /*
@@ -750,7 +760,10 @@ static int  (*p_nvssClose)(void*) = NULL;
 
 static void put_u32(unsigned char* p, unsigned at, uint32_t v) { memcpy(p + at, &v, 4); }
 
-static bool nvss_open(int width, int height) {
+/* The picture (width x height, as the phone sends it) is cut to the source
+ * rectangle sx,sy,sw,sh and scaled to the destination 0,0,dw,dh on the layer:
+ * at 720p the window's 1010x376 at 135,172, 1:1. */
+static bool nvss_open(int width, int height, int sx, int sy, int sw, int sh, int dw, int dh) {
     if (access(NVSS_OFF_MARKER, F_OK) == 0) {
         LOG("hwdecode: off for this boot (%s), using software decode", NVSS_OFF_MARKER);
         return false;
@@ -790,18 +803,23 @@ static bool nvss_open(int width, int height) {
     unsigned char attrs[64];
     memset(attrs, 0, sizeof(attrs));
     if (p_nvssGetAttribs(g_nvssHandle, attrs) == 0) {
-        /* Whole picture to the whole layer, and the layer shown. */
+        /* Source rectangle from byte 12, destination from 28, and the layer
+         * shown. Written as NVIDIA's NvRect (left, top, right, bottom) unless
+         * GAL_PLAYER_NVSS_RECT=xywh; for the whole picture (800x480) and for
+         * a destination at 0,0 both read the same. */
         attrs[8] = 1;
-        put_u32(attrs, 12, 0); put_u32(attrs, 16, 0); put_u32(attrs, 20, width); put_u32(attrs, 24, height);
-        put_u32(attrs, 28, 0); put_u32(attrs, 32, 0); put_u32(attrs, 36, width); put_u32(attrs, 40, height);
+        put_u32(attrs, 12, sx); put_u32(attrs, 16, sy);
+        put_u32(attrs, 20, g_nvssRectXywh ? sw : sx + sw); put_u32(attrs, 24, g_nvssRectXywh ? sh : sy + sh);
+        put_u32(attrs, 28, 0); put_u32(attrs, 32, 0); put_u32(attrs, 36, dw); put_u32(attrs, 40, dh);
         attrs[60] = 1; attrs[61] = 0;
         rc = p_nvssSetAttribs(g_nvssHandle, attrs);
         if (rc != 0) LOG("hwdecode: NvSSVideoSetAttribs=0x%x (continuing with the defaults)", (unsigned)rc);
     } else {
         LOG("hwdecode: NvSSVideoGetAttribs failed (continuing with the defaults)");
     }
-    LOG("hwdecode: NvSS decoder ready on displayable 3 (output=%u, %dx%d) in %llu ms",
-        g_nvssOutput, width, height, (unsigned long long)((now_us() - began) / 1000ULL));
+    LOG("hwdecode: NvSS decoder ready on displayable 3 (output=%u, %dx%d, picture %d,%d %dx%d to 0,0 %dx%d, rect %s) in %llu ms",
+        g_nvssOutput, width, height, sx, sy, sw, sh, dw, dh, g_nvssRectXywh ? "xywh" : "ltrb",
+        (unsigned long long)((now_us() - began) / 1000ULL));
     g_nvssActive = true;
     return true;
 }
@@ -841,7 +859,7 @@ static void nvss_disable_for_boot(const char* why) {
     LOGE("hwdecode: switched off for this boot (%s)", why);
 }
 #else
-static bool nvss_open(int, int) { return false; }
+static bool nvss_open(int, int, int, int, int, int, int, int) { return false; }
 static int nvss_decode(const uint8_t*, int) { return -1; }
 static void nvss_close() {}
 static void nvss_disable_for_boot(const char*) {}
@@ -1036,6 +1054,33 @@ static void remember_param_sets(const uint8_t* p, size_t n) {
             g_paramSetsLen += len;
         }
         i = end - 1;
+    }
+}
+
+/* GAL_PLAYER_RECORD: the stream as it arrives (codec config, then pictures,
+ * each ending in the hook's access unit delimiter), so the PC tests
+ * (tests/neon) can decode what the phone really sends. At most 48 MB in
+ * /tmp, which is memory; flushed after each read, so a crash keeps it. */
+static void record_stream(const uint8_t* p, size_t n) {
+    static FILE* f = NULL;
+    static uint64_t startUs = 0, written = 0;
+    static bool done = false;
+    if (g_recordSeconds <= 0 || done || n == 0) return;
+    uint64_t now = now_us();
+    if (!f) {
+        f = fopen(RECORD_PATH, "wb");
+        if (!f) { done = true; LOG("record: cannot write %s", RECORD_PATH); return; }
+        startUs = now;
+        LOG("record: saving the first %d s of the stream to %s", g_recordSeconds, RECORD_PATH);
+    }
+    bool ok = fwrite(p, 1, n, f) == n && fflush(f) == 0;
+    written += n;
+    if (!ok || now - startUs >= (uint64_t)g_recordSeconds * 1000000ULL || written >= (48u << 20)) {
+        fclose(f);
+        f = NULL;
+        done = true;
+        LOG("record: %s, %llu KB in %llu s", ok ? "done" : "write failed",
+            (unsigned long long)(written / 1024u), (unsigned long long)((now - startUs) / 1000000ULL));
     }
 }
 
@@ -1388,6 +1433,9 @@ static void* DecoderThreadFunc(void* arg) {
                 }
             }
 
+            g_streamBytes += (uint32_t)bytes_read;
+            record_stream(inbuf, (size_t)bytes_read);
+
             uint8_t* data = inbuf;
             size_t data_size = bytes_read;
 
@@ -1419,6 +1467,7 @@ static void* DecoderThreadFunc(void* arg) {
                     pthread_mutex_lock(&g_frameMutex);
                     g_decodedFrameCount++;
                     g_lastDecodeDurationUs = now_us() - t_dec_start;
+                    g_tDecodeUs += (uint32_t)g_lastDecodeDurationUs;
                     g_newFrameReady = true;
                     pthread_cond_signal(&g_frameCond);
                     pthread_mutex_unlock(&g_frameMutex);
@@ -1790,6 +1839,11 @@ static void load_player_config() {
             } else if (strcmp(key, "GAL_VC_RESTORE_DISPLAYABLE_ID") == 0) {
                 int v = atoi(val);
                 if (v > 0 && v < 1000) g_vcRestore = (unsigned)v;
+            } else if (strcmp(key, "GAL_PLAYER_RECORD") == 0) {
+                int s = atoi(val);
+                if (s >= 0 && s <= 300) g_recordSeconds = s;
+            } else if (strcmp(key, "GAL_PLAYER_NVSS_RECT") == 0) {
+                g_nvssRectXywh = strcmp(val, "xywh") == 0;
             } else if (strcmp(key, "GAL_PLAYER_STATS") == 0) {
                 /* 0 drops the once-a-second STATS line; everything else is still logged. */
                 g_verbose = atoi(val) != 0;
@@ -2028,8 +2082,9 @@ int main(int argc, char* argv[]) {
     /*
      * This unit's kernel faults misaligned NEON accesses (SIGBUS), where Linux
      * and Android allow them: 1.3.0-beta2 crashed at every start in
-     * ff_h264_h_loop_filter_luma_neon, which stores 4 bytes at pix-2. Those
-     * routines are left out of the build (tools/ffmpeg_qnx_aligned.sh). Should
+     * ff_h264_h_loop_filter_luma_neon, which stores 4 bytes at pix-2. Up to
+     * 1.4.0 those routines were left out of the build; from 1.4.1 they are
+     * rewritten with byte-element accesses (tools/ffmpeg_patches.py). Should
      * another one still fault, the crash handler leaves kNoNeonMarker in /tmp
      * and every later start until the next reboot decodes without NEON, as
      * 1.2.2-beta4 did. GAL_PLAYER_NEON=0 switches NEON off for good.
@@ -2066,14 +2121,26 @@ int main(int argc, char* argv[]) {
 #ifdef __QNX__
     check_map_window();
 #endif
-    /* The hardware decoder fills the window with the frame, so it is used
-     * only when the two are the same size. */
+    /* The hardware decoder shows a rectangle of the picture on the layer. An
+     * 800x480 window is the whole 800x480 picture; any other window needs the
+     * margins the hook asked the phone for (GAL_SECONDARY_MARGINS, at 720p
+     * 270x344 around the Superb's 1010x376), and then is cut out 1:1 as the
+     * software path does. 1.4.1-beta2: a test, not yet car-tested at 720p. */
+    int hwFrameW = windowWidth, hwFrameH = windowHeight, hwSrcX = 0, hwSrcY = 0;
     if (g_hwDecoder && (windowWidth != 800 || windowHeight != 480)) {
-        LOG("hwdecode: the window is %dx%d, not Android Auto's 800x480; using software decode",
-            windowWidth, windowHeight);
-        g_hwDecoder = false;
+        if (g_marginW > 0 || g_marginH > 0) {
+            hwFrameW = windowWidth + g_marginW;
+            hwFrameH = windowHeight + g_marginH;
+            hwSrcX = g_marginW / 2;
+            hwSrcY = g_marginH / 2;
+        } else {
+            LOG("hwdecode: a %dx%d window without GAL_SECONDARY_MARGINS; using software decode",
+                windowWidth, windowHeight);
+            g_hwDecoder = false;
+        }
     }
-    if (g_hwDecoder && nvss_open(windowWidth, windowHeight)) {
+    if (g_hwDecoder && nvss_open(hwFrameW, hwFrameH, hwSrcX, hwSrcY, windowWidth, windowHeight,
+                                 windowWidth, windowHeight)) {
         ack_connect();
         pthread_t hwThread;
         if (pthread_create(&hwThread, NULL, DecoderThreadFunc, NULL) != 0) {
@@ -2084,6 +2151,10 @@ int main(int argc, char* argv[]) {
         uint64_t lastUs = now_us(), lastCount = 0;
         struct rusage lastUsage;
         getrusage(RUSAGE_SELF, &lastUsage);
+        /* Once a minute, as the software path's health and timing lines. */
+        uint64_t minuteUs = lastUs, minuteCount = 0;
+        uint32_t minuteDecUs = g_tDecodeUs, minuteBytes = g_streamBytes;
+        struct rusage minuteUsage = lastUsage;
         while (g_running) {
             pthread_mutex_lock(&g_frameMutex);
             struct timespec until;
@@ -2110,6 +2181,20 @@ int main(int argc, char* argv[]) {
                               get_process_memory_mb());
                 }
                 lastUs = now; lastCount = count; lastUsage = cur;
+                if (now - minuteUs >= 60000000ULL) {
+                    double span = (double)(now - minuteUs);
+                    uint32_t n = (uint32_t)(count - minuteCount);
+                    uint32_t decUs = g_tDecodeUs - minuteDecUs, bytes = g_streamBytes - minuteBytes;
+                    double cpu = (double)(cur.ru_utime.tv_sec - minuteUsage.ru_utime.tv_sec) * 1e6 +
+                                 (double)(cur.ru_utime.tv_usec - minuteUsage.ru_utime.tv_usec) +
+                                 (double)(cur.ru_stime.tv_sec - minuteUsage.ru_stime.tv_sec) * 1e6 +
+                                 (double)(cur.ru_stime.tv_usec - minuteUsage.ru_stime.tv_usec);
+                    LOG("health: hardware decoder, %u pictures (%.1f/s) in the last minute, %.1f ms a decode call; data %.0f kB/s, %.1f kB a picture; player CPU %.0f%% of one core t=%llu.%03llu",
+                        n, n * 1e6 / span, n ? decUs / 1000.0 / n : 0.0, bytes * 1e6 / 1024.0 / span,
+                        n ? bytes / 1024.0 / n : 0.0, cpu * 100.0 / span, T_ARGS(now));
+                    minuteUs = now; minuteCount = count; minuteDecUs += decUs; minuteBytes += bytes;
+                    minuteUsage = cur;
+                }
             }
         }
         execute_final_commands();
@@ -2511,8 +2596,13 @@ int main(int argc, char* argv[]) {
                                (double)(ru.ru_stime.tv_sec - s_healthUsage.ru_stime.tv_sec) * 1e6 +
                                (double)(ru.ru_stime.tv_usec - s_healthUsage.ru_stime.tv_usec);
                 double minuteUs = (double)(frameEndUs - s_healthUs);
-                LOG("health: %u pictures decoded (%.1f/s), %u drawn in the last minute; brightness %u of 255 (under 16 is black) t=%llu.%03llu",
-                    decoded, (double)decoded * 1e6 / minuteUs, drawn, g_lastLuma, T_ARGS(frameEndUs));
+                static uint32_t s_bytes0 = 0;
+                uint32_t bytes = g_streamBytes - s_bytes0;
+                s_bytes0 += bytes;
+                LOG("health: %u pictures decoded (%.1f/s), %u drawn in the last minute; brightness %u of 255 (under 16 is black); data %.0f kB/s, %.1f kB a picture t=%llu.%03llu",
+                    decoded, (double)decoded * 1e6 / minuteUs, drawn, g_lastLuma,
+                    (double)bytes * 1e6 / 1024.0 / minuteUs, decoded ? bytes / 1024.0 / decoded : 0.0,
+                    T_ARGS(frameEndUs));
                 LOG("timing: per picture decode %.1f ms (max %.1f), copy %.1f ms, upload %.1f ms, draw+swap %.1f ms; slowest shown %.1f ms; player CPU %.0f%% of one core",
                     decoded ? dDec / 1000.0 / decoded : 0.0, g_tDecodeMaxUs / 1000.0,
                     drawn ? dCopy / 1000.0 / drawn : 0.0,
