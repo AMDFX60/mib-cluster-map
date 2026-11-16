@@ -63,6 +63,15 @@ for the Skoda cockpit.
 
 ## Changelog
 
+### 1.4.2 (in test, compared with 1.4.1)
+
+- **Faster decoder:** the deblocking filters for edges next to an
+  intra-coded block, which ran in C on the head unit's 32-bit ARM (FFmpeg
+  has them in NEON only for 64-bit), now run in NEON. On a PC, with a
+  cockpit stream recorded on the Superb, 7.6 % less work a picture over
+  120 s and 9.1 % in a busy stretch, with bit-for-bit the same pictures;
+  roughly one more picture a second where the decoder is the limit.
+
 ### 1.4.1 (compared with 1.4.0)
 
 - **Cockpit map closer to the centre screen:** 110 ms behind on average per
@@ -214,6 +223,7 @@ the SD card, so leave the card in slot 1.
 | 720p picture 1:1, colours | Car-tested: sharper |
 | NEON decoder (smoothness) | Car-tested: 17 to 30 pictures a second instead of 9 to 10 |
 | The six NEON routines rewritten, deblocking set-up skipped where nothing is filtered (1.4.1) | Car-tested: no fault in about 30 minutes; the gain is within the drive's spread |
+| Intra deblocking filters in NEON (1.4.2) | Not yet car-tested; PC: 7.6 % less work a picture on the Superb's recorded stream |
 | Cockpit delay behind the phone (1.4.0) | Car-tested: 0.03 to 0.2 s on average instead of about 2 s |
 | 3 pictures in flight instead of 4 (1.4.1) | Car-tested: 110 ms on average instead of 166 ms, same pictures a second |
 | Picture handover without a copy in the decoder (1.3.0) | Car-tested: runs fine; its own gain not measured separately |

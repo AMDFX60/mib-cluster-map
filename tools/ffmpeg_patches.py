@@ -3,15 +3,23 @@
 
     tools/ffmpeg_patches.py <ffmpeg source dir>
 
-Two patches, both giving bit for bit the pictures of FFmpeg's C code:
+Three patches, all giving bit for bit the pictures of FFmpeg's C code:
+
+tools/ffmpeg_intra_neon.patch (1.4.2-beta1): the bS = 4 loop filters (an
+edge next to an intra-coded block) in NEON. FFmpeg has them in NEON only
+for aarch64; on 32-bit ARM they ran in C, about 9 % of the decoding work on
+the Superb's recorded cockpit stream (Google Maps puts intra blocks
+wherever new map comes into view). Luma vertical and horizontal edges, and
+chroma ones for 4:2:0; the MBAFF and 4:2:2 vertical-edge variants stay in
+C (the phone sends neither). Byte-element loads and stores only, like the
+rewritten routines below.
 
 tools/ffmpeg_deblock_skip.patch (1.4.1-beta2): the deblocking loop skips
 the per-macroblock set-up where the filter cannot change a pixel (an inter
 16x16 block without coefficients next to neighbours with the same motion;
 see no_deblock_edges() in it). On ARM FFmpeg has no fast path for that
 set-up (no h264_loop_filter_strength), so it was 10 to 20 % of the decoding
-work; the black frame around the cockpit map and a map moving as a whole are
-such blocks. PC: up to 15 % fewer instructions per picture, 6 % on the
+work; a map moving as a whole is made of such blocks. PC: up to 15 % fewer instructions per picture, 6 % on the
 night map stream.
 
 tools/ffmpeg_qnx_aligned.patch (1.4.1-beta1), the NEON routines:
@@ -47,6 +55,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 PATCHES = [  # (patch, a file it changes, a text that is there once applied)
     ("ffmpeg_qnx_aligned.patch", "libavcodec/arm/h264dsp_neon.S", "QNX (mib-cluster-map)"),
+    ("ffmpeg_intra_neon.patch", "libavcodec/arm/h264dsp_init_arm.c", "ff_h264_h_loop_filter_luma_intra_neon;"),
     ("ffmpeg_deblock_skip.patch", "libavcodec/h264_slice.c", "no_deblock_edges(h, sl, mb_x"),
 ]
 SCANNED = ["h264dsp_neon.S", "h264cmc_neon.S", "h264pred_neon.S",

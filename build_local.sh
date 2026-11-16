@@ -104,11 +104,12 @@ build_player() {
     # source. tools/qnx_cc.sh forces stddef.h into C files only.
     # The QNX kernel of the unit faults misaligned accesses (1.3.0-beta2 crashed in
     # a NEON loop filter), so tools/ffmpeg_patches.py rewrites the NEON
-    # routines that made them (up to 1.4.0 they were left out), and neither
+    # routines that made them (up to 1.4.0 they were left out) and adds the
+    # intra loop filters in NEON (1.4.2), and neither
     # FFmpeg (--disable-fast-unaligned) nor the compiler (-mno-unaligned-access)
     # may make them in C. A new setting always starts from the unpacked source
     # (the tarball is kept beside it).
-    FFCONF=neon-cortex-a9-aligned-6
+    FFCONF=neon-cortex-a9-aligned-7
     if [ ! -f $FF/libavcodec/libavcodec.a ] || [ "$(cat $FF/.mibcm-ffconf 2>/dev/null)" != "$FFCONF" ]; then
       mkdir -p $FF/
       find $FF/ -mindepth 1 -maxdepth 1 ! -name ffmpeg-$V.tar.gz -exec rm -rf {} +

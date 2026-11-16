@@ -7,13 +7,14 @@
 # The head unit's QNX kernel stops a program (SIGBUS) at a NEON load or store
 # of 16 or 32-bit elements that is not aligned to the element size; Linux and
 # Android allow it. 1.3.0-beta2 crashed that way, 1.3.0 to 1.4.0 left the six
-# FFmpeg routines that do it to C, and 1.4.1 rewrites them
+# FFmpeg routines that do it to C, 1.4.1 rewrites them, and 1.4.2 adds the
+# intra loop filters in NEON
 # (tools/ffmpeg_patches.py). This test builds, once, in the docker volume
 # mib-cluster-map-neontest:
 #   - QEMU 9.2.0 for ARM, patched (qemu_strict.py) to fault such accesses
 #     like the unit, or every misaligned access in FFmpeg's code;
 #   - FFmpeg 6.1.5 for a Cortex-A9 with the car's flags: as shipped (orig),
-#     as 1.4.0 (c6) and as 1.4.1 (new); each with FFmpeg's checkasm and
+#     as 1.4.0 (c6) and as now (new); each with FFmpeg's checkasm and
 #     dectest.c, which decodes like the player;
 #   - test streams from the cockpit photos in docs/images.
 # test: every picture of every stream from c6 and new must equal FFmpeg's C

@@ -216,15 +216,18 @@ works.
 **720p picture (this fork's standard, `CLUSTERMAP_720P=1`):** even the sharper map leaves
 only 800 columns for the 1010 of the window, and the phone squeezes its picture
 before the player stretches it again. Android Auto also offers 1280×720 for a
-cluster display: with margins of 270×344 the phone draws exactly the
-1010×376 window's pixels into the middle of that frame, and the player shows
-them 1:1, without any scaling (other projects run 720p and 1080p cluster
+cluster display: with margins of 270×344 the window's 1010×376 pixels are
+the middle of that frame, and the player shows them 1:1, without any scaling (other projects run 720p and 1080p cluster
 streams; Google's own head unit documentation sets a cluster up this way).
 The hook scales DPI and insets from the 800×298 band to the window by
 1010/800, so the settings keep their meaning; its log says
 `event=config.hd_frame`. The player log says `1:1 (exact pixels)` in its
-`render:` line when it works. The margins are black and cost almost nothing,
-and from 1.2.2-beta4 only the window's part is copied and uploaded.
+`render:` line when it works. The phone does not leave the margins black: a
+stream recorded on the Superb (1.4.1-beta3) has the map over the whole
+frame, with the hidden turn card above the window. So the decoder works on
+2.4 times the pixels that are shown, and cannot skip the rest, as map from
+the margins moves into the window; from 1.2.2-beta4 only the window's part
+is copied and uploaded.
 Car-tested on the Superb (1.2.2-beta3): sharper than the sharper map, but
 only 9 to 10 pictures a second. The player's `timing:` line (once a minute
 with its `health:` line, from beta4) showed why: decoding took about 100 ms

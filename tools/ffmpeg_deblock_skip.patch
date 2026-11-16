@@ -13,7 +13,7 @@
 + * and motion vectors less than 4 quarter pixels apart. Then bS is 0 on both
 + * edges it filters, as check_mv() would find. Frame pictures with one
 + * reference list only, no 8x8 transform. On the cockpit's 720p stream this
-+ * is the black frame around the map and the map moving as a whole.
++ * is mostly the map moving as a whole.
 + */
 +static av_always_inline int no_deblock_edges(const H264Context *h, const H264SliceContext *sl,
 +                                             int mb_x, int mb_y, int mb_xy, int mb_type)

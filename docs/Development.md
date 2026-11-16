@@ -73,7 +73,11 @@ These shaped the design; changing them has broken things before.
   nothing to share (the decoder thread runs at 100 % of one core once the map
   is busy, the unit at 86 to 88 % in all), and `skip_loop_filter` NONREF
   never skips anything. Decode time follows the data per picture, about
-  4.5 ms + 2.5 ms per kB.
+  4.5 ms + 2.5 ms per kB. The phone draws the map over the whole 1280x720
+  frame, margins included (59 % of it, never shown), and that part cannot be
+  left undecoded: when the car drives or turns, map from the margins moves
+  into the window, and every P picture builds on the one before until the
+  next keyframe.
 - **No second hardware decoder.** `libnvss_video.so`, gal's decoder for the
   centre screen, cannot show a second stream on the Skoda (car test
   1.4.1-beta3). On output 1 `NvSSVideoStreamConfigure` fails ("Invalid display
@@ -236,15 +240,24 @@ fast deblocking set-up on ARM (no `h264_loop_filter_strength`), so for every
 macroblock it fills the filter caches and works out the edge strengths in C,
 10 to 20 % of the decoding work, even where nothing is filtered. The patch
 skips that for an inter 16x16 macroblock without coefficients whose
-neighbours move the same way (the black frame around the cockpit map, a map
-moving as a whole), where the strength is 0 on every edge. Both patches
+neighbours move the same way (a map moving as a whole), where the strength
+is 0 on every edge. `tools/ffmpeg_intra_neon.patch` (1.4.2) adds the
+filters for edges next to an intra-coded block (strength 4) in NEON, which
+FFmpeg has only for aarch64: on 32-bit ARM they ran in C, about 1,400
+instructions an edge against 130 for the normal NEON filter, and Google
+Maps codes new map that comes into view as intra blocks. All three patches
 give FFmpeg's C code's pictures bit for bit.
 
 Where the decoding work goes (`tests/neon/run.sh prof`, map-like streams,
 1.4.1-beta1): entropy decoding and macroblock set-up 21 to 31 %, motion
 compensation and reconstruction 39 to 42 %, deblocking 23 to 36 % (more on
 the dark map), of which the filters themselves (NEON) are only a few per
-cent. Switching deblocking off (`GAL_PLAYER_DEBLOCK=all`) saves 23 to 41 %,
+cent. The stream recorded on the Superb (1.4.1, first 600 pictures, 19.1
+million instructions a picture) has more intra blocks: entropy decoding
+28 %, deblocking 43 % (C set-up 22 %, NEON filters 10 %, the intra filters
+then still in C 10 %), the rest 29 %. With the intra filters in NEON
+(1.4.2) 9.1 % fewer instructions there and 7.6 % over the whole 120 s.
+Allowing unaligned loads in the C code would save only 3.5 %. Switching deblocking off (`GAL_PLAYER_DEBLOCK=all`) saves 23 to 41 %,
 but the errors then build up from picture to picture until the next
 keyframe, which the phone sends about once a minute: down to 19 dB on the
 night map stream, plainly visible. Not an option.
@@ -258,8 +271,11 @@ shipped must stop in `ff_h264_h_loop_filter_luma_neon` at the same
 instruction as in the car, or the check itself is broken.
 `tests/neon/run.sh prof` counts the instructions per picture (1.4.1-beta2:
 7 % fewer than 1.4.0 on the day map stream, 14 % on the night map, 21 % at a
-low data rate). A stream recorded in the car (`GAL_PLAYER_RECORD`) can be
-put beside the test streams in the volume's `streams` folder.
+low data rate; 1.4.2-beta1 on the Superb's recorded stream: 17.3 million,
+23 % fewer than 1.4.0 and 10 % fewer than FFmpeg's own NEON build). A stream recorded in the car (`GAL_PLAYER_RECORD`) can be
+put beside the test streams in the volume's `streams` folder (the 1.4.2
+numbers come from the first 600 pictures of the Superb's, kept there as
+`car600.h264` and not in the repository, as it shows where the car drove).
 
 The menu screen only reaches the unit with the software update when its
 version there is higher than the installed one. `tools/make_metainfo.py`

@@ -31,7 +31,7 @@ gcc -O2 -shared -fPIC -I/t/qemu/include/qemu $(pkg-config --cflags glib-2.0) \
 # --- FFmpeg for a Cortex-A9 with the car's flags, three ways ----------------
 #   orig  NEON as FFmpeg ships it (what crashed in the car in 1.3.0-beta2)
 #   c6    1.4.0: the six misaligned routines not used (FFmpeg's C code)
-#   new   tools/ffmpeg_patches.py applied (1.4.1 on)
+#   new   tools/ffmpeg_patches.py applied (as now shipped)
 [ -f dl/ffmpeg-$FV.tar.gz ] || curl -fsSL --retry 3 -o dl/ffmpeg-$FV.tar.gz https://ffmpeg.org/releases/ffmpeg-$FV.tar.gz
 echo "$FSHA  dl/ffmpeg-$FV.tar.gz" | sha256sum -c - > /dev/null
 STAMP=$(cat /repo/tools/ffmpeg_patches.py /repo/tools/ffmpeg_*.patch | md5sum | cut -c1-32)
@@ -111,11 +111,11 @@ if [ "$MODE" = test ] || [ "$MODE" = all ]; then
   # Per stream:
   #   ref    C code only (no NEON): the pictures every other run must give
   #   c6     1.4.0, NEON accesses checked as the unit does
-  #   new    1.4.1, NEON accesses checked as the unit does
+  #   new    as shipped now, NEON accesses checked as the unit does
   #   newT2  the same with the player's two slice threads (reference: C code
   #          with two threads; FFmpeg's fast mode then skips filtering
   #          across slice edges, so it differs from one thread on t6)
-  #   new2   1.4.1, every access in FFmpeg checked (core loads too)
+  #   new2   the same, every access in FFmpeg checked (core loads too)
   #   orig   FFmpeg as shipped, unchecked (as on Linux and Android)
   #   origS  FFmpeg as shipped, checked: must stop as the car did
   rm -f /t/res/*
@@ -174,7 +174,7 @@ fi
 
 if [ "$MODE" = prof ] || [ "$MODE" = all ]; then
   # Instructions per picture (one decoder thread, no MD5 work): the PC's
-  # estimate of decoding time, 1.4.0 (c6) against 1.4.1 (new) and FFmpeg
+  # estimate of decoding time, 1.4.0 (c6) against now (new) and FFmpeg
   # as shipped (orig).
   for f in $STREAMS; do
     s=$(basename $f .h264)
@@ -191,7 +191,7 @@ if [ "$MODE" = prof ] || [ "$MODE" = all ]; then
     n=$(grep -o 'frames [0-9]*' res/$s.c6.profrun | cut -d' ' -f2)
     awk -v s=$s -v n=$n -v a=$(head -1 res/$s.c6.prof | cut -d' ' -f2) \
         -v b=$(head -1 res/$s.new.prof | cut -d' ' -f2) -v c=$(head -1 res/$s.orig.prof | cut -d' ' -f2) \
-        'BEGIN { printf "  %-14s 1.4.0 %6.2f   1.4.1 %6.2f (%4.1f %% fewer)   FFmpeg as shipped %6.2f\n",
+        'BEGIN { printf "  %-14s 1.4.0 %6.2f   now %6.2f (%4.1f %% fewer)   FFmpeg as shipped %6.2f\n",
                  s, a/n/1e6, b/n/1e6, 100*(a-b)/a, c/n/1e6 }'
   done
 fi
