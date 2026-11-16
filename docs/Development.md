@@ -23,9 +23,8 @@ phone ──USB──► gal (stock Android Auto program)
    player. It depends on the exact layout of `gal`, which is why each
    firmware needs a profile (`src/firmware_profiles.h`). On a build it does not
    recognise, it does nothing.
-2. **The player** (`player/opengl_gpu.cc`) decodes the video, either with the
-   unit's NvSS hardware decoder (`libnvss_video.so`, the one `gal` uses for
-   the centre screen) or FFmpeg in software drawn with `glDrawTextureNV`. At
+2. **The player** (`player/opengl_gpu.cc`) decodes the video with FFmpeg in
+   software and draws it with `glDrawTextureNV`. At
    the first keyframe it switches the cluster to its window
    (`dmdt dc 70 3`, `dmdt sc 4 70`); at the end it gives the stock map back
    (`dmdt dc 70 33`).
@@ -53,11 +52,13 @@ These shaped the design; changing them has broken things before.
   waiting in the loopback socket, so the phone kept a queue of 2–3 s there.
   Only a leak is still caught: after 3 s of quiet with the player idle,
   outstanding credit beyond one frame goes back (`ack.leak_released`). The
-  window itself (`max_unacked`, sink +0x1c) is 4 (`GAL_SECONDARY_MAX_UNACKED`);
-  every frame in flight waits in front of the decoder, so it bounds the
-  delay. `ack.latency` in the hook log gives hook-to-ACK time once a minute:
+  window itself (`max_unacked`, sink +0x1c) is 3 from 1.4.1, 4 in 1.4.0
+  (`GAL_SECONDARY_MAX_UNACKED`); every frame in flight waits in front of the
+  decoder, so it bounds the delay. `ack.latency` in the hook log gives hook-to-ACK time once a minute:
   34 to 213 ms on average on the Superb (1.4.0-beta2), about 4 × the decode
-  time once the decoder is the limit, against about 2 s with 1.3.0.
+  time once the decoder is the limit, against about 2 s with 1.3.0. With 3
+  (1.4.1-beta3 car test) 73 to 157 ms, 110 on average against 166 with 4,
+  and the same pictures a second in the minutes the decoder was the limit.
 - **No frame-parallel decoding.** FFmpeg frame threading holds each frame
   until the next packet arrives, while the phone waits for the
   acknowledgement before sending it: a deadlock that ends at the phone's
@@ -65,6 +66,24 @@ These shaped the design; changing them has broken things before.
   For the same reason the hook ends each frame with an access unit
   delimiter: FFmpeg's H.264 parser only knows a picture is complete when the
   next one starts, and the delimiter is that start.
+- **What the phone sends limits the software decoder.** A recorded cockpit
+  stream (Google Maps, 1.4.1-beta3 car test): Baseline profile, level 3.1, CAVLC, one
+  reference picture, no B pictures, one slice per picture, a keyframe every
+  85 to 160 s, and every P picture a reference picture. So slice threads have
+  nothing to share (the decoder thread runs at 100 % of one core once the map
+  is busy, the unit at 86 to 88 % in all), and `skip_loop_filter` NONREF
+  never skips anything. Decode time follows the data per picture, about
+  4.5 ms + 2.5 ms per kB.
+- **No second hardware decoder.** `libnvss_video.so`, gal's decoder for the
+  centre screen, cannot show a second stream on the Skoda (car test
+  1.4.1-beta3). On output 1 `NvSSVideoStreamConfigure` fails ("Invalid display
+  width/height": the cockpit's display 1 is 0 x 0 in `dmdt gs`, as it is fed
+  through the video encoder). On output 0 it configures, but
+  `NvMediaVideoMixerBindOutput` finds no free window of the display
+  controller ("Window is in use"; gal holds the centre screen's), even when
+  NvSS draws onto a display-manager layer. The player's `GAL_PLAYER_DECODER=hw`
+  was removed with 1.4.1. Decoding with NvMedia directly into a GL texture
+  would be the only way left, with no headers to go on.
 - **TCP, not a Unix socket.** On QNX 6.5 a Unix socket has a fixed 5 KB
   buffer that `setsockopt` ignores; a 140 KB keyframe needs 27 round trips and
   the stream falls to 3–4 fps. TCP loopback takes 2 MB buffers.

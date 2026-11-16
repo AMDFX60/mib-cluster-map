@@ -122,8 +122,8 @@ int hook_fix_enabled(hook_fix fix);
  * GAL_SECONDARY_MAX_UNACKED: how many cluster frames the phone may have sent
  * and not yet had ACKed (the max_unacked of the secondary sink's setup
  * answer). Every frame in flight waits in front of the player's decoder, so
- * this bounds how far the cockpit map can lag. 4 by default (8 up to
- * 1.4.0-beta1), 1 to 16.
+ * this bounds how far the cockpit map can lag. 3 by default from 1.4.1 (4 in
+ * 1.4.0, 8 up to 1.4.0-beta1), 1 to 16.
  */
 unsigned gal_hook_max_unacked(void);
 /* GAL_FOCUS_START=stock lets gal's setup-time mode 1 through; default native. */

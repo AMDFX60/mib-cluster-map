@@ -309,9 +309,6 @@ static volatile uint32_t g_streamBytes = 0;
  * RECORD_PATH, for "Save logs to SD" to take along (0 = off, at most 300). */
 static int g_recordSeconds = 0;
 #define RECORD_PATH "/tmp/clustermap-stream.h264"
-/* GAL_PLAYER_NVSS_RECT: how the hardware decoder's rectangles are written,
- * left/top/right/bottom (NVIDIA's NvRect, the default) or x/y/width/height. */
-static bool g_nvssRectXywh = false;
 static char g_videoSource[512] = "tcp://127.0.0.1:12346";
 
 /*
@@ -713,156 +710,6 @@ static void execute_final_commands() {
 #else
 static void request_display_switch() {}
 static void execute_final_commands() {}
-#endif
-
-// ---------------- Hardware decode (NvSS) ----------------
-/*
- * GAL_PLAYER_DECODER=hw hands each complete H.264 access unit to the unit's
- * own decoder, libnvss_video.so: the library gal uses for the centre screen.
- * It decodes and scans the picture out straight onto a display-manager layer,
- * here displayable 3, the one context 70 puts on the cluster, so there is no
- * FFmpeg decode, YUV copy or GL draw (the software path costs 60-120 % of a
- * core). The structures are the ones gal itself fills before each call (open
- * parameters at this+8, the 12-byte stream config, the 64-byte attributes with
- * rectangles from byte 8 and visibility at 60/61), the same layout
- * aberbic/Audi-MHI2-Virtual-Cockpit-Altscreen-CarPlay-AndroidAuto uses on
- * Tegra MU1438.
- *
- * Any failure before the first picture falls back to software decode in this
- * process. A failure after it marks hardware decode off for the rest of the
- * boot (NVSS_OFF_MARKER) and ends the player; the stock map is restored and
- * the next session uses software.
- */
-#define NVSS_OFF_MARKER "/tmp/stream-player.hwdecode.off"
-static bool g_hwDecoder = false;          /* GAL_PLAYER_DECODER=hw */
-static unsigned g_nvssOutput = 1;         /* GAL_PLAYER_NVSS_OUTPUT: 1 as aberbic's cluster path; gal uses 0 (LVDS) for the centre screen */
-static bool g_nvssActive = false;
-
-#ifdef __QNX__
-struct NvssOpenParams { uint32_t output, reserved; uint8_t priority, useLayer, layer, pad; uint32_t buffers, r2, r3; };
-struct NvssStreamConfig { uint32_t width, height; float fps; };
-struct NvssInput { void* data; uint32_t length; uint64_t timestamp; uint8_t flag, pad[7]; };
-typedef char nvss_open_size_check[sizeof(NvssOpenParams) == 24 ? 1 : -1];
-typedef char nvss_input_layout_check[offsetof(NvssInput, timestamp) == 8 ? 1 : -1];
-
-static const uint32_t kNvssTimeout = 0x80000006u;   /* "try again": gal retries it (retryCount 5) */
-static const int kNvssWaitMs = 35;
-static const unsigned kNvssMaxRetries = 5;
-
-static void* g_nvssHandle = NULL;
-static int  (*p_kdInitializeNV)(void) = NULL;
-static int  (*p_nvssOpen)(void**, const NvssOpenParams*) = NULL;
-static int  (*p_nvssConfigure)(void*, const NvssStreamConfig*) = NULL;
-static int  (*p_nvssGetAttribs)(void*, void*) = NULL;
-static int  (*p_nvssSetAttribs)(void*, const void*) = NULL;
-static int  (*p_nvssDecode)(void*, const NvssInput*, int) = NULL;
-static int  (*p_nvssClose)(void*) = NULL;
-
-static void put_u32(unsigned char* p, unsigned at, uint32_t v) { memcpy(p + at, &v, 4); }
-
-/* The picture (width x height, as the phone sends it) is cut to the source
- * rectangle sx,sy,sw,sh and scaled to the destination 0,0,dw,dh on the layer:
- * at 720p the window's 1010x376 at 135,172, 1:1. */
-static bool nvss_open(int width, int height, int sx, int sy, int sw, int sh, int dw, int dh) {
-    if (access(NVSS_OFF_MARKER, F_OK) == 0) {
-        LOG("hwdecode: off for this boot (%s), using software decode", NVSS_OFF_MARKER);
-        return false;
-    }
-    void* kd = dlopen("libKD.so", RTLD_NOW | RTLD_GLOBAL);
-    void* nv = dlopen("libnvss_video.so", RTLD_NOW | RTLD_GLOBAL);
-    if (!kd || !nv) {
-        const char* e = dlerror();
-        LOG("hwdecode: dlopen failed (%s), using software decode", e ? e : "unknown");
-        return false;
-    }
-#define NVSS_LOAD(dst, lib, name) do { *(void**)(&(dst)) = dlsym(lib, name); \
-        if (!(dst)) { LOG("hwdecode: %s missing, using software decode", name); return false; } } while (0)
-    NVSS_LOAD(p_kdInitializeNV, kd, "kdInitializeNV");
-    NVSS_LOAD(p_nvssOpen, nv, "NvSSVideoOpen");
-    NVSS_LOAD(p_nvssConfigure, nv, "NvSSVideoStreamConfigure");
-    NVSS_LOAD(p_nvssGetAttribs, nv, "NvSSVideoGetAttribs");
-    NVSS_LOAD(p_nvssSetAttribs, nv, "NvSSVideoSetAttribs");
-    NVSS_LOAD(p_nvssDecode, nv, "NvSSVideoDecode");
-    NVSS_LOAD(p_nvssClose, nv, "NvSSVideoClose");
-#undef NVSS_LOAD
-    uint64_t began = now_us();
-    int rc = p_kdInitializeNV();
-    if (rc != 0) { LOG("hwdecode: kdInitializeNV=%d, using software decode", rc); return false; }
-
-    /* As gal: priority 100, on a layer, 8 buffers. The layer is displayable 3. */
-    NvssOpenParams op;
-    memset(&op, 0, sizeof(op));
-    op.output = g_nvssOutput; op.priority = 100; op.useLayer = 1; op.layer = 3; op.buffers = 8;
-    rc = p_nvssOpen(&g_nvssHandle, &op);
-    if (rc != 0 || !g_nvssHandle) { LOG("hwdecode: NvSSVideoOpen=0x%x, using software decode", (unsigned)rc); g_nvssHandle = NULL; return false; }
-
-    NvssStreamConfig cfg = { (uint32_t)width, (uint32_t)height, 30.0f };
-    rc = p_nvssConfigure(g_nvssHandle, &cfg);
-    if (rc != 0) { LOG("hwdecode: NvSSVideoStreamConfigure=0x%x, using software decode", (unsigned)rc); p_nvssClose(g_nvssHandle); g_nvssHandle = NULL; return false; }
-
-    unsigned char attrs[64];
-    memset(attrs, 0, sizeof(attrs));
-    if (p_nvssGetAttribs(g_nvssHandle, attrs) == 0) {
-        /* Source rectangle from byte 12, destination from 28, and the layer
-         * shown. Written as NVIDIA's NvRect (left, top, right, bottom) unless
-         * GAL_PLAYER_NVSS_RECT=xywh; for the whole picture (800x480) and for
-         * a destination at 0,0 both read the same. */
-        attrs[8] = 1;
-        put_u32(attrs, 12, sx); put_u32(attrs, 16, sy);
-        put_u32(attrs, 20, g_nvssRectXywh ? sw : sx + sw); put_u32(attrs, 24, g_nvssRectXywh ? sh : sy + sh);
-        put_u32(attrs, 28, 0); put_u32(attrs, 32, 0); put_u32(attrs, 36, dw); put_u32(attrs, 40, dh);
-        attrs[60] = 1; attrs[61] = 0;
-        rc = p_nvssSetAttribs(g_nvssHandle, attrs);
-        if (rc != 0) LOG("hwdecode: NvSSVideoSetAttribs=0x%x (continuing with the defaults)", (unsigned)rc);
-    } else {
-        LOG("hwdecode: NvSSVideoGetAttribs failed (continuing with the defaults)");
-    }
-    LOG("hwdecode: NvSS decoder ready on displayable 3 (output=%u, %dx%d, picture %d,%d %dx%d to 0,0 %dx%d, rect %s) in %llu ms",
-        g_nvssOutput, width, height, sx, sy, sw, sh, dw, dh, g_nvssRectXywh ? "xywh" : "ltrb",
-        (unsigned long long)((now_us() - began) / 1000ULL));
-    g_nvssActive = true;
-    return true;
-}
-
-/* 0 = decoded, <0 = failed. */
-static int nvss_decode(const uint8_t* data, int size) {
-    NvssInput in;
-    memset(&in, 0, sizeof(in));
-    in.data = (void*)data; in.length = (uint32_t)size; in.timestamp = UINT64_MAX;   /* no timestamp scheduling */
-    unsigned retries = 0;
-    int rc;
-    for (;;) {
-        rc = p_nvssDecode(g_nvssHandle, &in, kNvssWaitMs);
-        if ((uint32_t)rc != kNvssTimeout || retries >= kNvssMaxRetries || !g_running) break;
-        retries++;
-        usleep(1000);
-    }
-    if (rc != 0) {
-        LOGE("hwdecode: NvSSVideoDecode=0x%x after %u retries", (unsigned)rc, retries);
-        return -1;
-    }
-    return 0;
-}
-
-static void nvss_close() {
-    if (g_nvssHandle) {
-        int rc = p_nvssClose(g_nvssHandle);
-        LOG("hwdecode: decoder closed (%d)", rc);
-        g_nvssHandle = NULL;
-    }
-    g_nvssActive = false;
-}
-
-static void nvss_disable_for_boot(const char* why) {
-    int fd = open(NVSS_OFF_MARKER, O_CREAT | O_WRONLY | O_TRUNC, 0644);
-    if (fd >= 0) { (void)write(fd, why, strlen(why)); close(fd); }
-    LOGE("hwdecode: switched off for this boot (%s)", why);
-}
-#else
-static bool nvss_open(int, int, int, int, int, int, int, int) { return false; }
-static int nvss_decode(const uint8_t*, int) { return -1; }
-static void nvss_close() {}
-static void nvss_disable_for_boot(const char*) {}
 #endif
 
 static void write_ack();
@@ -1448,32 +1295,6 @@ static void* DecoderThreadFunc(void* arg) {
                 data += len;
                 data_size -= len;
 
-                if (packet->size > 0 && g_nvssActive) {
-                    /* Hardware path: the parser's access units go to NvSS,
-                     * which draws them on the layer itself. */
-                    if (!hasDecodedKeyframe) {
-                        if (!parser->key_frame) { ack_no_picture(); continue; }
-                        hasDecodedKeyframe = true;
-                        LOG("decoder: first keyframe for the hardware decoder t=%llu.%03llu", T_ARGS(now_us()));
-                    }
-                    uint64_t t_dec_start = now_us();
-                    if (nvss_decode(packet->data, packet->size) != 0) {
-                        nvss_disable_for_boot(g_decodedFrameCount ? "decode failed" : "first decode failed");
-                        g_running = false;
-                        pthread_cond_broadcast(&g_frameCond);
-                        break;
-                    }
-                    if (g_decodedFrameCount == 0) request_display_switch();
-                    pthread_mutex_lock(&g_frameMutex);
-                    g_decodedFrameCount++;
-                    g_lastDecodeDurationUs = now_us() - t_dec_start;
-                    g_tDecodeUs += (uint32_t)g_lastDecodeDurationUs;
-                    g_newFrameReady = true;
-                    pthread_cond_signal(&g_frameCond);
-                    pthread_mutex_unlock(&g_frameMutex);
-                    write_ack();
-                    continue;
-                }
                 if (packet->size > 0) {
                     uint64_t t_dec_start = now_us();
                     int ret = avcodec_send_packet(codecCtx, packet);
@@ -1792,8 +1613,6 @@ static void load_player_config() {
                 g_idleMaxBytes = atoi(val);
             } else if (strcmp(key, "GAL_PLAYER_HEARTBEAT_HZ") == 0) {
                 g_idleHeartbeatHz = atoi(val);
-            } else if (strcmp(key, "GAL_PLAYER_DECODER") == 0) {
-                g_hwDecoder = strcmp(val, "hw") == 0;
             } else if (strcmp(key, "GAL_PLAYER_WINDOW") == 0) {
                 int w = 0, h = 0;
                 if (sscanf(val, "%dx%d", &w, &h) == 2 &&
@@ -1824,9 +1643,6 @@ static void load_player_config() {
                 /* auto (default): as the stream says; old: full-range BT.601 as before. */
                 if (strcmp(val, "old") == 0) g_colorAuto = false;
                 else if (strcmp(val, "auto") == 0) g_colorAuto = true;
-            } else if (strcmp(key, "GAL_PLAYER_NVSS_OUTPUT") == 0) {
-                int o = atoi(val);
-                if (o == 0 || o == 1) g_nvssOutput = (unsigned)o;
             } else if (strcmp(key, "GAL_VC_CONTEXT") == 0) {
                 int v = atoi(val);
                 if (v > 0 && v < 1000) g_vcContext = (unsigned)v;
@@ -1842,8 +1658,6 @@ static void load_player_config() {
             } else if (strcmp(key, "GAL_PLAYER_RECORD") == 0) {
                 int s = atoi(val);
                 if (s >= 0 && s <= 300) g_recordSeconds = s;
-            } else if (strcmp(key, "GAL_PLAYER_NVSS_RECT") == 0) {
-                g_nvssRectXywh = strcmp(val, "xywh") == 0;
             } else if (strcmp(key, "GAL_PLAYER_STATS") == 0) {
                 /* 0 drops the once-a-second STATS line; everything else is still logged. */
                 g_verbose = atoi(val) != 0;
@@ -2113,100 +1927,9 @@ int main(int argc, char* argv[]) {
     signal(SIGILL,  crash_signal_handler);
     signal(SIGFPE,  crash_signal_handler);
 
-    /*
-     * Hardware decode: no EGL window or GL at all, NvSS owns displayable 3.
-     * This thread only reports statistics and waits for the end of the
-     * stream; the decoder thread decodes, switches the cluster and ACKs.
-     */
 #ifdef __QNX__
     check_map_window();
 #endif
-    /* The hardware decoder shows a rectangle of the picture on the layer. An
-     * 800x480 window is the whole 800x480 picture; any other window needs the
-     * margins the hook asked the phone for (GAL_SECONDARY_MARGINS, at 720p
-     * 270x344 around the Superb's 1010x376), and then is cut out 1:1 as the
-     * software path does. 1.4.1-beta2: a test, not yet car-tested at 720p. */
-    int hwFrameW = windowWidth, hwFrameH = windowHeight, hwSrcX = 0, hwSrcY = 0;
-    if (g_hwDecoder && (windowWidth != 800 || windowHeight != 480)) {
-        if (g_marginW > 0 || g_marginH > 0) {
-            hwFrameW = windowWidth + g_marginW;
-            hwFrameH = windowHeight + g_marginH;
-            hwSrcX = g_marginW / 2;
-            hwSrcY = g_marginH / 2;
-        } else {
-            LOG("hwdecode: a %dx%d window without GAL_SECONDARY_MARGINS; using software decode",
-                windowWidth, windowHeight);
-            g_hwDecoder = false;
-        }
-    }
-    if (g_hwDecoder && nvss_open(hwFrameW, hwFrameH, hwSrcX, hwSrcY, windowWidth, windowHeight,
-                                 windowWidth, windowHeight)) {
-        ack_connect();
-        pthread_t hwThread;
-        if (pthread_create(&hwThread, NULL, DecoderThreadFunc, NULL) != 0) {
-            LOGE("decoder: failed to create background thread");
-            nvss_close();
-            return 1;
-        }
-        uint64_t lastUs = now_us(), lastCount = 0;
-        struct rusage lastUsage;
-        getrusage(RUSAGE_SELF, &lastUsage);
-        /* Once a minute, as the software path's health and timing lines. */
-        uint64_t minuteUs = lastUs, minuteCount = 0;
-        uint32_t minuteDecUs = g_tDecodeUs, minuteBytes = g_streamBytes;
-        struct rusage minuteUsage = lastUsage;
-        while (g_running) {
-            pthread_mutex_lock(&g_frameMutex);
-            struct timespec until;
-            clock_gettime(CLOCK_REALTIME, &until);
-            until.tv_sec += 1;
-            while (g_running && !g_newFrameReady) {
-                if (pthread_cond_timedwait(&g_frameCond, &g_frameMutex, &until) != 0) break;
-            }
-            g_newFrameReady = false;
-            pthread_mutex_unlock(&g_frameMutex);
-            uint64_t now = now_us();
-            if (now - lastUs >= 1000000ULL) {
-                uint64_t count = g_decodedFrameCount;
-                struct rusage cur;
-                getrusage(RUSAGE_SELF, &cur);
-                uint64_t cpuUs = (cur.ru_utime.tv_sec - lastUsage.ru_utime.tv_sec) * 1000000ULL +
-                                 (cur.ru_utime.tv_usec - lastUsage.ru_utime.tv_usec) +
-                                 (cur.ru_stime.tv_sec - lastUsage.ru_stime.tv_sec) * 1000000ULL +
-                                 (cur.ru_stime.tv_usec - lastUsage.ru_stime.tv_usec);
-                if (g_verbose && count > 0) {
-                    LOG_STATS("HW DEC: %5.1f fps (%4.1fms) | CPU: %5.1f%% | MEM: %5.1f MB",
-                              (double)(count - lastCount) * 1000000.0 / (double)(now - lastUs),
-                              us_to_ms(g_lastDecodeDurationUs), (double)cpuUs * 100.0 / (double)(now - lastUs),
-                              get_process_memory_mb());
-                }
-                lastUs = now; lastCount = count; lastUsage = cur;
-                if (now - minuteUs >= 60000000ULL) {
-                    double span = (double)(now - minuteUs);
-                    uint32_t n = (uint32_t)(count - minuteCount);
-                    uint32_t decUs = g_tDecodeUs - minuteDecUs, bytes = g_streamBytes - minuteBytes;
-                    double cpu = (double)(cur.ru_utime.tv_sec - minuteUsage.ru_utime.tv_sec) * 1e6 +
-                                 (double)(cur.ru_utime.tv_usec - minuteUsage.ru_utime.tv_usec) +
-                                 (double)(cur.ru_stime.tv_sec - minuteUsage.ru_stime.tv_sec) * 1e6 +
-                                 (double)(cur.ru_stime.tv_usec - minuteUsage.ru_stime.tv_usec);
-                    LOG("health: hardware decoder, %u pictures (%.1f/s) in the last minute, %.1f ms a decode call; data %.0f kB/s, %.1f kB a picture; player CPU %.0f%% of one core t=%llu.%03llu",
-                        n, n * 1e6 / span, n ? decUs / 1000.0 / n : 0.0, bytes * 1e6 / 1024.0 / span,
-                        n ? bytes / 1024.0 / n : 0.0, cpu * 100.0 / span, T_ARGS(now));
-                    minuteUs = now; minuteCount = count; minuteDecUs += decUs; minuteBytes += bytes;
-                    minuteUsage = cur;
-                }
-            }
-        }
-        execute_final_commands();
-        g_running = false;
-        int hs = g_streamSock;
-        if (hs >= 0) shutdown(hs, SHUT_RDWR);
-        LOG("shutting down: waiting for decoder thread");
-        pthread_join(hwThread, NULL);
-        nvss_close();
-        LOG("stream-player terminated cleanly");
-        return 0;
-    }
 
 #ifdef __QNX__
     // Keep libdisplayinit.so resident for the entire application lifetime!

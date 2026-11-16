@@ -167,7 +167,7 @@ static int g_output_mode = GAL_OUTPUT_WITHHOLD;
 static int g_focus_mirror;
 static int g_focus_start_native = 1;
 static int g_focus_wait_kombi;
-static unsigned g_max_unacked = 4u;   /* GAL_SECONDARY_MAX_UNACKED */
+static unsigned g_max_unacked = 3u;   /* GAL_SECONDARY_MAX_UNACKED */
 
 int hook_fix_enabled(hook_fix fix)
 {
@@ -515,8 +515,10 @@ int gal_hook_init(const gal_secondary_config *config)
      * unACKed, and the player ACKs a frame once it is drawn. When the phone
      * draws faster than the 720p decoder keeps up with (about 20-28 pictures
      * a second on the Superb), every frame in flight waits in front of the
-     * decoder: 8 meant up to 8 x 40-50 ms behind the centre screen. 4 still
-     * keeps the decoder busy (a frame's round trip is well under 4 decodes).
+     * decoder: 8 meant up to 8 x 40-50 ms behind the centre screen. 3 from
+     * 1.4.1 (4 in 1.4.0): in the 1.4.1-beta3 car test the minutes where the
+     * decoder was the limit kept the same pictures a second with 3 as with
+     * 4, and ack.latency fell from 166 to 110 ms on average.
      */
     value = getenv("GAL_SECONDARY_MAX_UNACKED");
     if (value != NULL && *value != '\0') {

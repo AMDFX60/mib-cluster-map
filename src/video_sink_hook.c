@@ -808,7 +808,7 @@ static int build_secondary_sink(void *primary, void *controller)
     store_u32(g_secondary_sink, 0x14u, 3u);  /* H.264 */
     store_u32(g_secondary_sink, 0x18u, 0xffffffffu);
     /* max_unacked, sent to the phone in the setup answer: see
-     * gal_hook_max_unacked (4; 8 up to 1.4.0-beta1). */
+     * gal_hook_max_unacked (3 from 1.4.1; 4 in 1.4.0, 8 up to 1.4.0-beta1). */
     store_u32(g_secondary_sink, 0x1cu, gal_hook_max_unacked());
     store_u8(g_secondary_sink, 0x30u, 1u); /* request startup video focus */
     store_u32(g_secondary_sink, 0x4cu, config->viewing_distance);

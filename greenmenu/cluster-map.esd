@@ -61,35 +61,6 @@ script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/switch_to_turn_by_turn.sh"
     label   "Switch to turn-by-turn arrows instead (no map)"
 
-keyValue
-    value   String sys 0x00000000 0
-    label   "Tests 1.4.1: each step, then reboot, drive, Save logs"
-    poll    0
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/step1.sh"
-    label   "Step 1: software decoder, stream recorded"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/step2.sh"
-    label   "Step 2: hardware decoder"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/step3.sh"
-    label   "Step 3: hardware decoder, rectangle xywh"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/step4.sh"
-    label   "Step 4: hardware decoder, output 0"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/step5.sh"
-    label   "Step 5: software decoder, delay window 3"
-
-script
-    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/step6.sh"
-    label   "Step 6: back to standard"
-
 script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/savelogs.sh"
     label   "Save logs to SD"
