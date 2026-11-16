@@ -65,37 +65,21 @@ for the Skoda cockpit.
 
 ### 1.4.1 (compared with 1.4.0)
 
-- **Decoder faster, most of all on the night map.** Measured on a PC in an
-  ARM emulator that faults misaligned accesses as the unit does: 7 % fewer
-  instructions per picture than 1.4.0 on a day map stream, 14 % on a night
-  map stream, 21 % at a low data rate, with bit-for-bit the same pictures.
-  Two changes:
-  - Six of FFmpeg's NEON routines access memory in a way the head unit's
-    kernel does not allow (1.3.0-beta2 crashed in one at every start), so up
-    to 1.4.0 they ran in slower C code: the deblocking filter across
-    vertical edges, the chroma motion compensation of small blocks and the
-    chroma plane prediction. They are rewritten so that they need no
-    alignment and run in NEON again.
-  - The deblocking filter's set-up, which on ARM FFmpeg does in C for every
-    macroblock (10 to 20 % of the work, more on the dark map), is skipped
-    where nothing would be filtered: the black frame around the map and
-    map areas that move as a whole.
-
-  In the car both ran for about 30 minutes over five starts without a fault.
-  The car's figures vary more with the map than these gains: decoding took
-  30 to 59 ms a picture within one drive, depending on how much of the map
-  changes.
-- **Cockpit map closer to the centre screen:** the phone may have 3 cockpit
-  pictures in flight instead of 4 (`GAL_SECONDARY_MAX_UNACKED`). Car test on
-  the Superb: 110 ms delay on average per minute instead of 166 ms, with the
-  same pictures a second where the decoder was the limit.
-- **Logs:** the player's `health:` line gives the data rate (kB a second and
-  a picture), so minutes with a similar map can be compared;
-  `GAL_PLAYER_RECORD` saves the start of the cockpit stream for a PC test;
-  **Save logs to SD** also takes the unit's settings.
-- **The unit's own video decoder is gone** (`GAL_PLAYER_DECODER=hw`, never
-  car-tested before): on the Skoda it cannot show a second stream, so it
-  only ever fell back to the software decoder.
+- **Cockpit map closer to the centre screen:** 110 ms behind on average per
+  minute instead of 166 ms, with the same pictures a second. The phone may
+  have 3 cockpit pictures in flight instead of 4 (`GAL_SECONDARY_MAX_UNACKED`).
+- **Faster decoder:** six of FFmpeg's NEON routines, which ran in slower C
+  code since 1.3.0-beta2 because the head unit does not allow their
+  misaligned memory accesses, are rewritten and run in NEON again, and the
+  deblocking set-up is skipped where nothing is filtered. On a PC 7 % (day
+  map) to 14 % (night map) less work a picture, with bit-for-bit the same
+  pictures; in the car about 30 minutes without a fault.
+- **Logs:** the player's `health:` line gives the data rate,
+  `GAL_PLAYER_RECORD` saves the start of the cockpit stream, and **Save logs
+  to SD** also takes the unit's settings.
+- **Removed:** the unit's own video decoder (`GAL_PLAYER_DECODER=hw`). It
+  cannot show a second stream on the Skoda, so it only ever fell back to the
+  software decoder ([why](docs/Development.md#what-was-learned)).
 
 ### 1.4.0 (compared with 1.3)
 
