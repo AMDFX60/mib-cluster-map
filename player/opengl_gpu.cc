@@ -54,6 +54,20 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavutil/cpu.h>
+
+/*
+ * Deblocking on its own thread (tools/ffmpeg_deblock_thread.patch, 1.4.2-beta2):
+ * switched on and given a priority before the decoder opens, and its running
+ * totals for the once-a-minute log. Weak, so a player linked against an
+ * FFmpeg without the patch still builds and says so in its log.
+ */
+extern int mibcm_h264_deblock_thread __attribute__((weak));
+extern int mibcm_h264_deblock_priority __attribute__((weak));
+extern volatile int mibcm_h264_dbt_state __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_rows_thread __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_rows_decoder __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_waits __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_wait_us __attribute__((weak));
 }
 
 // ---------------- Configuration & Performance Knobs ----------------
@@ -79,6 +93,19 @@ static const bool g_ffmpegLowDelay   = true;
 static bool  g_ffmpegFastDecode     = true;
 static int   g_ffmpegSkipFrame      = AVDISCARD_DEFAULT;
 static int   g_ffmpegSkipLoopFilter = AVDISCARD_NONREF; // Default: noref eliminates macroblock prediction blur during movement
+/*
+ * Deblocking, 43 % of the decoding work, on a second core (1.4.2): the
+ * decoder thread has that much less to do per picture. The thread runs at
+ * 11: above the unit's background programs at 10 (its own navigation among
+ * them), below its interface (13, 14), gal and the decoder (16). At 9, below
+ * them all, it got only a third of a core on the Superb and took 58 to 69 %
+ * of the rows; at 11 about half a core and 95 % (car tests 1.4.2-beta2).
+ * When it falls behind, the decoder finishes the picture's rows itself.
+ * GAL_PLAYER_DEBLOCK_THREAD=0 puts it back into the decoder thread;
+ * GAL_PLAYER_DEBLOCK_PRIORITY sets the thread's priority (0 = the decoder's).
+ */
+static bool  g_deblockThread        = true;
+static int   g_deblockPriority      = 11;
 static int   g_idleMaxBytes         = 0;      // Stationary frame threshold (default: 0 = disabled for pure 30 FPS)
 static int   g_idleHeartbeatHz      = 0;      // Stationary heartbeat keepalive rate in Hz (default: 0 = disabled)
 static bool  g_loopFile             = false;
@@ -1094,6 +1121,28 @@ static void* DecoderThreadFunc(void* arg) {
         g_ffmpegThreadCount, thread_type_name, g_ffmpegLowDelay ? 1 : 0, g_ffmpegFastDecode ? 1 : 0, deblock_name,
         g_idleMaxBytes, g_idleHeartbeatHz);
 
+    /* Deblocking thread (1.4.2): FFmpeg starts it with the first
+     * picture and gives it this priority. */
+    if (!&mibcm_h264_deblock_thread || !&mibcm_h264_deblock_priority) {
+        LOG("decoder: deblocking in the decoder thread (this FFmpeg has no deblocking thread)");
+    } else if (!g_deblockThread || g_ffmpegSkipLoopFilter == AVDISCARD_ALL) {
+        mibcm_h264_deblock_thread = 0;
+        LOG("decoder: deblocking in the decoder thread (%s)",
+            g_deblockThread ? "deblocking is off" : "GAL_PLAYER_DEBLOCK_THREAD=0");
+    } else {
+        int policy = 0;
+        struct sched_param me;
+        memset(&me, 0, sizeof(me));
+        pthread_getschedparam(pthread_self(), &policy, &me);
+        mibcm_h264_deblock_thread = 1;
+        mibcm_h264_deblock_priority = g_deblockPriority;
+        if (g_deblockPriority > 0)
+            LOG("decoder: deblocking on its own thread, priority %d (the decoder's: %d)",
+                g_deblockPriority, me.sched_priority);
+        else
+            LOG("decoder: deblocking on its own thread, at the decoder's priority %d", me.sched_priority);
+    }
+
     if (avcodec_open2(codecCtx, codec, NULL) < 0) {
         LOGE("avcodec: open failed");
         avcodec_free_context(&codecCtx);
@@ -1664,6 +1713,12 @@ static void load_player_config() {
             } else if (strcmp(key, "GAL_PLAYER_PRIORITY") == 0) {
                 int p = atoi(val);
                 if (p >= 0 && p <= 20) g_priority = p;
+            } else if (strcmp(key, "GAL_PLAYER_DEBLOCK_THREAD") == 0) {
+                /* 1 (default): deblocking on its own thread; 0: in the decoder thread. */
+                g_deblockThread = atoi(val) != 0;
+            } else if (strcmp(key, "GAL_PLAYER_DEBLOCK_PRIORITY") == 0) {
+                int p = atoi(val);
+                if (p >= 0 && p <= 63) g_deblockPriority = p;
             }
         }
         fclose(f);
@@ -2339,6 +2394,21 @@ int main(int argc, char* argv[]) {
                         drawn, rep - s_rep0, nop - s_nop0);
                     s_rep0 = rep;
                     s_nop0 = nop;
+                }
+                if (&mibcm_h264_dbt_state && &mibcm_h264_deblock_thread && mibcm_h264_deblock_thread) {
+                    /* Deblocking thread (1.4.2-beta2): how much of the work it
+                     * took off the decoder thread, and how often the decoder
+                     * waited for its last row at a picture's end. */
+                    static unsigned s_rt0 = 0, s_rd0 = 0, s_w0 = 0, s_wus0 = 0;
+                    unsigned rt = mibcm_h264_dbt_rows_thread, rd = mibcm_h264_dbt_rows_decoder;
+                    unsigned w = mibcm_h264_dbt_waits, wus = mibcm_h264_dbt_wait_us;
+                    unsigned dRt = rt - s_rt0, dRd = rd - s_rd0, dW = w - s_w0, dWus = wus - s_wus0;
+                    if (mibcm_h264_dbt_state < 0)
+                        LOG("deblock: its own thread could not be started; the decoder thread does it");
+                    else if (dRt + dRd > 0)
+                        LOG("deblock: %.0f%% of the rows on its own thread, %u left to the decoder at a picture's end; the decoder waited for it %u times, %.2f ms a picture",
+                            100.0 * dRt / (dRt + dRd), dRd, dW, decoded ? dWus / 1000.0 / decoded : 0.0);
+                    s_rt0 = rt; s_rd0 = rd; s_w0 = w; s_wus0 = wus;
                 }
                 g_tDecodeMaxUs = 0;
                 g_tFrameMaxUs = 0;

@@ -1,0 +1,530 @@
+diff -ru -U 8 a/libavcodec/h264_slice.c b/libavcodec/h264_slice.c
+--- a/libavcodec/h264_slice.c
++++ b/libavcodec/h264_slice.c
+@@ -42,16 +42,22 @@
+ #include "h264_ps.h"
+ #include "golomb.h"
+ #include "mathops.h"
+ #include "mpegutils.h"
+ #include "rectangle.h"
+ #include "refstruct.h"
+ #include "thread.h"
+ #include "threadframe.h"
++#include "config.h"
++#include "libavutil/time.h"
++#if HAVE_PTHREADS
++#include <pthread.h>
++#include <sched.h>
++#endif
+ 
+ static const uint8_t field_scan[16+1] = {
+     0 + 0 * 4, 0 + 1 * 4, 1 + 0 * 4, 0 + 2 * 4,
+     0 + 3 * 4, 1 + 1 * 4, 1 + 2 * 4, 1 + 3 * 4,
+     2 + 0 * 4, 2 + 1 * 4, 2 + 2 * 4, 2 + 3 * 4,
+     3 + 0 * 4, 3 + 1 * 4, 3 + 2 * 4, 3 + 3 * 4,
+ };
+ 
+@@ -2526,16 +2532,276 @@
+     }
+     sl->slice_type  = old_slice_type;
+     sl->mb_x         = end_x;
+     sl->mb_y         = end_mb_y - FRAME_MBAFF(h);
+     sl->chroma_qp[0] = get_chroma_qp(h->ps.pps, 0, sl->qscale);
+     sl->chroma_qp[1] = get_chroma_qp(h->ps.pps, 1, sl->qscale);
+ }
+ 
++/*
++ * mib-cluster-map 1.4.2: deblocking on its own thread.
++ *
++ * On the head unit (a quad-core Cortex-A9) one decoder thread did all the
++ * work of a 720p picture, and the deblocking filter was 43 % of it. When a
++ * picture is one slice (the phone sends nothing else), decode_slice() now
++ * hands each finished row of macroblocks to a second thread, which filters
++ * it with loop_filter() as the decoder would have, two rows behind: rows
++ * are filtered in the same order and with the same data, so the pictures
++ * stay bit for bit the same. Two rows, because filtering row y changes the
++ * bottom of row y - 1 and all of row y, while decoding row y + 2 reads the
++ * unfiltered bottom of row y + 1 for intra prediction; the decoder runs with
++ * deblocking_filter = 0 for that, as FFmpeg's own postponed filtering does
++ * (no top border exchange). At the end of the slice the decoder waits for
++ * the row in progress and filters what is left itself, so a thread that
++ * gets little CPU costs at most one row of waiting (and its priority is
++ * raised to the decoder's while it is waited for).
++ *
++ * The player switches it on (mibcm_h264_deblock_thread) and may give the
++ * thread a lower priority than the decoder's (mibcm_h264_deblock_priority,
++ * 0 = the decoder's), so it only uses what the unit has to spare.
++ */
++int mibcm_h264_deblock_thread   = 0;
++int mibcm_h264_deblock_priority = 0;
++/* For the player's log: 1 running, -1 could not be started; running totals. */
++volatile int      mibcm_h264_dbt_state       = 0;
++volatile unsigned mibcm_h264_dbt_slices      = 0;
++volatile unsigned mibcm_h264_dbt_rows_thread  = 0;
++volatile unsigned mibcm_h264_dbt_rows_decoder = 0;
++volatile unsigned mibcm_h264_dbt_waits       = 0;
++volatile unsigned mibcm_h264_dbt_wait_us     = 0;
++
++#if HAVE_PTHREADS
++typedef struct MibcmDeblockThread {
++    pthread_t        thread;
++    pthread_mutex_t  lock;
++    pthread_cond_t   work;          /* to the thread: rows ready, or stop */
++    pthread_cond_t   done;          /* to the decoder: a row finished */
++    const H264Context *h;
++    int stop, active, ending, busy;
++    int first_y, first_x;           /* where the slice starts */
++    int next_y;                     /* the next row to filter */
++    int dec_end;                    /* rows above this one are decoded */
++    int part_y, part_x0, part_x1;   /* a last row the slice ends inside */
++    int orig_deblock;
++    H264SliceContext sl;            /* the slice's parameters, for loop_filter() */
++} MibcmDeblockThread;
++
++static void mibcm_dbt_row(MibcmDeblockThread *t, int y, int x0, int x1)
++{
++    t->sl.mb_y = y;
++    loop_filter(t->h, &t->sl, x0, x1);
++}
++
++static void mibcm_dbt_set_priority(MibcmDeblockThread *t, int boost)
++{
++    struct sched_param p, me;
++    int policy, my_policy;
++
++    if (mibcm_h264_deblock_priority <= 0 ||
++        pthread_getschedparam(t->thread, &policy, &p))
++        return;
++    if (boost) {
++        if (pthread_getschedparam(pthread_self(), &my_policy, &me) ||
++            me.sched_priority <= mibcm_h264_deblock_priority)
++            return;
++        p.sched_priority = me.sched_priority;
++    } else {
++        p.sched_priority = mibcm_h264_deblock_priority;
++    }
++    pthread_setschedparam(t->thread, policy, &p);
++}
++
++static void *mibcm_dbt_main(void *arg)
++{
++    MibcmDeblockThread *t = arg;
++
++    if (mibcm_h264_deblock_priority > 0) {
++        struct sched_param p;
++        int policy;
++        if (!pthread_getschedparam(pthread_self(), &policy, &p)) {
++            p.sched_priority = mibcm_h264_deblock_priority;
++            pthread_setschedparam(pthread_self(), policy, &p);
++        }
++    }
++    pthread_mutex_lock(&t->lock);
++    for (;;) {
++        int y;
++        while (!t->stop && !(t->active && !t->ending && t->next_y + 1 < t->dec_end))
++            pthread_cond_wait(&t->work, &t->lock);
++        if (t->stop)
++            break;
++        y = t->next_y++;
++        t->busy = 1;
++        pthread_mutex_unlock(&t->lock);
++
++        mibcm_dbt_row(t, y, y == t->first_y ? t->first_x : 0, t->h->mb_width);
++
++        pthread_mutex_lock(&t->lock);
++        t->busy = 0;
++        mibcm_h264_dbt_rows_thread++;
++        if (t->ending)
++            pthread_cond_signal(&t->done);
++    }
++    pthread_mutex_unlock(&t->lock);
++    return NULL;
++}
++
++/* Decoder, at the start of a slice: 1 if the thread filters its rows. */
++static int mibcm_dbt_begin(const H264Context *hc, H264SliceContext *sl)
++{
++    H264Context *h = (H264Context *)hc;
++    MibcmDeblockThread *t = h->mibcm_dbt;
++
++    if (!mibcm_h264_deblock_thread || !sl->deblocking_filter ||
++        h->postpone_filter || h->nb_slice_ctx_queued != 1 || sl != h->slice_ctx ||
++        h->picture_structure != PICT_FRAME || FRAME_MBAFF(h) || h->pixel_shift ||
++        h->ps.sps->chroma_format_idc != 1 || h->avctx->draw_horiz_band ||
++        (h->avctx->active_thread_type & FF_THREAD_FRAME))
++        return 0;
++
++    if (!t) {
++        if (mibcm_h264_dbt_state < 0)
++            return 0;
++        t = av_mallocz(sizeof(*t));
++        if (!t || pthread_mutex_init(&t->lock, NULL)) {
++            av_free(t);
++            mibcm_h264_dbt_state = -1;
++            return 0;
++        }
++        if (pthread_cond_init(&t->work, NULL)) {
++            pthread_mutex_destroy(&t->lock);
++            av_free(t);
++            mibcm_h264_dbt_state = -1;
++            return 0;
++        }
++        if (pthread_cond_init(&t->done, NULL)) {
++            pthread_cond_destroy(&t->work);
++            pthread_mutex_destroy(&t->lock);
++            av_free(t);
++            mibcm_h264_dbt_state = -1;
++            return 0;
++        }
++        t->h = h;
++        if (pthread_create(&t->thread, NULL, mibcm_dbt_main, t)) {
++            pthread_cond_destroy(&t->done);
++            pthread_cond_destroy(&t->work);
++            pthread_mutex_destroy(&t->lock);
++            av_free(t);
++            mibcm_h264_dbt_state = -1;
++            av_log(h->avctx, AV_LOG_WARNING, "deblocking thread not started\n");
++            return 0;
++        }
++        h->mibcm_dbt = t;
++        mibcm_h264_dbt_state = 1;
++    }
++
++    pthread_mutex_lock(&t->lock);
++    t->sl           = *sl;   /* same top_borders, which the decoder leaves alone now */
++    t->first_y      = sl->mb_y;
++    t->first_x      = sl->mb_x;
++    t->next_y       = sl->mb_y;
++    t->dec_end      = sl->mb_y;
++    t->part_x0      = t->part_x1 = 0;
++    t->orig_deblock = sl->deblocking_filter;
++    t->ending       = 0;
++    t->active       = 1;
++    pthread_mutex_unlock(&t->lock);
++    mibcm_h264_dbt_slices++;
++    return 1;
++}
++
++/* Decoder, at the end of a row: rows above end_y are decoded. */
++static void mibcm_dbt_rows(const H264Context *h, int end_y)
++{
++    MibcmDeblockThread *t = h->mibcm_dbt;
++
++    if (!t || !t->active)
++        return;
++    pthread_mutex_lock(&t->lock);
++    t->dec_end = end_y;
++    pthread_cond_signal(&t->work);
++    pthread_mutex_unlock(&t->lock);
++}
++
++/* Decoder, where the slice ends inside a row: what loop_filter() got. */
++static void mibcm_dbt_partial(const H264Context *h, const H264SliceContext *sl,
++                              int x0, int x1)
++{
++    MibcmDeblockThread *t = h->mibcm_dbt;
++
++    if (!t || !t->active)
++        return;
++    t->part_y  = sl->mb_y;
++    t->part_x0 = x0;
++    t->part_x1 = x1;
++}
++
++/* Decoder, after the slice (also after an error): every row it finished is
++ * filtered when this returns, and the thread is idle. */
++static void mibcm_dbt_end(const H264Context *h, H264SliceContext *sl)
++{
++    MibcmDeblockThread *t = h->mibcm_dbt;
++    int y;
++
++    if (!t || !t->active)
++        return;
++    pthread_mutex_lock(&t->lock);
++    t->ending = 1;
++    if (t->busy) {
++        int64_t t0 = av_gettime_relative();
++        mibcm_dbt_set_priority(t, 1);
++        while (t->busy)
++            pthread_cond_wait(&t->done, &t->lock);
++        mibcm_dbt_set_priority(t, 0);
++        mibcm_h264_dbt_waits++;
++        mibcm_h264_dbt_wait_us += (unsigned)(av_gettime_relative() - t0);
++    }
++    y = t->next_y;
++    pthread_mutex_unlock(&t->lock);
++
++    for (; y < t->dec_end; y++) {
++        mibcm_dbt_row(t, y, y == t->first_y ? t->first_x : 0, h->mb_width);
++        mibcm_h264_dbt_rows_decoder++;
++    }
++    if (t->part_x1 > t->part_x0)
++        mibcm_dbt_row(t, t->part_y, t->part_x0, t->part_x1);
++
++    pthread_mutex_lock(&t->lock);
++    t->active = 0;
++    t->ending = 0;
++    pthread_mutex_unlock(&t->lock);
++    sl->deblocking_filter = t->orig_deblock;
++}
++
++void ff_h264_mibcm_dbt_free(H264Context *h)
++{
++    MibcmDeblockThread *t = h->mibcm_dbt;
++
++    if (!t)
++        return;
++    pthread_mutex_lock(&t->lock);
++    t->stop = 1;
++    pthread_cond_signal(&t->work);
++    pthread_mutex_unlock(&t->lock);
++    pthread_join(t->thread, NULL);
++    pthread_cond_destroy(&t->done);
++    pthread_cond_destroy(&t->work);
++    pthread_mutex_destroy(&t->lock);
++    av_freep(&h->mibcm_dbt);
++}
++#else
++static int  mibcm_dbt_begin(const H264Context *h, H264SliceContext *sl) { return 0; }
++static void mibcm_dbt_rows(const H264Context *h, int end_y) { }
++static void mibcm_dbt_partial(const H264Context *h, const H264SliceContext *sl,
++                              int x0, int x1) { }
++static void mibcm_dbt_end(const H264Context *h, H264SliceContext *sl) { }
++void ff_h264_mibcm_dbt_free(H264Context *h) { }
++#endif
++
+ static void predict_field_decoding_flag(const H264Context *h, H264SliceContext *sl)
+ {
+     const int mb_xy = sl->mb_x + sl->mb_y * h->mb_stride;
+     int mb_type     = (h->slice_table[mb_xy - 1] == sl->slice_num) ?
+                       h->cur_pic.mb_type[mb_xy - 1] :
+                       (h->slice_table[mb_xy - h->mb_stride] == sl->slice_num) ?
+                       h->cur_pic.mb_type[mb_xy - h->mb_stride] : 0;
+     sl->mb_mbaff    = sl->mb_field_decoding_flag = IS_INTERLACED(mb_type) ? 1 : 0;
+@@ -2582,17 +2848,17 @@
+     if (!sl->h264->enable_er)
+         return;
+ 
+     if (CONFIG_ERROR_RESILIENCE) {
+         ff_er_add_slice(sl->er, startx, starty, endx, endy, status);
+     }
+ }
+ 
+-static int decode_slice(struct AVCodecContext *avctx, void *arg)
++static int decode_slice_mbs(struct AVCodecContext *avctx, void *arg)
+ {
+     H264SliceContext *sl = arg;
+     const H264Context *h = sl->h264;
+     int lf_x_start = sl->mb_x;
+     int orig_deblock = sl->deblocking_filter;
+     int ret;
+ 
+     sl->linesize   = h->cur_pic_ptr->f->linesize[0];
+@@ -2603,16 +2869,18 @@
+         return ret;
+ 
+     sl->mb_skip_run = -1;
+ 
+     av_assert0(h->block_offset[15] == (4 * ((scan8[15] - scan8[0]) & 7) << h->pixel_shift) + 4 * sl->linesize * ((scan8[15] - scan8[0]) >> 3));
+ 
+     if (h->postpone_filter)
+         sl->deblocking_filter = 0;
++    if (mibcm_dbt_begin(h, sl))
++        sl->deblocking_filter = 0;
+ 
+     sl->is_complex = FRAME_MBAFF(h) || h->picture_structure != PICT_FRAME ||
+                      (CONFIG_GRAY && (h->flags & AV_CODEC_FLAG_GRAY));
+ 
+     if (!(h->avctx->active_thread_type & FF_THREAD_SLICE) && h->picture_structure == PICT_FRAME && sl->er->error_status_table) {
+         const int start_i  = av_clip(sl->resync_mb_x + sl->resync_mb_y * h->mb_width, 0, h->mb_num - 1);
+         if (start_i) {
+             int prev_status = sl->er->error_status_table[sl->er->mb_index2xy[start_i - 1]];
+@@ -2661,51 +2929,56 @@
+                 sl->mb_y--;
+             }
+             eos = get_cabac_terminate(&sl->cabac);
+ 
+             if ((h->workaround_bugs & FF_BUG_TRUNCATED) &&
+                 sl->cabac.bytestream > sl->cabac.bytestream_end + 2) {
+                 er_add_slice(sl, sl->resync_mb_x, sl->resync_mb_y, sl->mb_x - 1,
+                              sl->mb_y, ER_MB_END);
+-                if (sl->mb_x >= lf_x_start)
++                if (sl->mb_x >= lf_x_start) {
+                     loop_filter(h, sl, lf_x_start, sl->mb_x + 1);
++                    mibcm_dbt_partial(h, sl, lf_x_start, sl->mb_x + 1);
++                }
+                 goto finish;
+             }
+             if (sl->cabac.bytestream > sl->cabac.bytestream_end + 2 )
+                 av_log(h->avctx, AV_LOG_DEBUG, "bytestream overread %"PTRDIFF_SPECIFIER"\n", sl->cabac.bytestream_end - sl->cabac.bytestream);
+             if (ret < 0 || sl->cabac.bytestream > sl->cabac.bytestream_end + 4) {
+                 av_log(h->avctx, AV_LOG_ERROR,
+                        "error while decoding MB %d %d, bytestream %"PTRDIFF_SPECIFIER"\n",
+                        sl->mb_x, sl->mb_y,
+                        sl->cabac.bytestream_end - sl->cabac.bytestream);
+                 er_add_slice(sl, sl->resync_mb_x, sl->resync_mb_y, sl->mb_x,
+                              sl->mb_y, ER_MB_ERROR);
+                 return AVERROR_INVALIDDATA;
+             }
+ 
+             if (++sl->mb_x >= h->mb_width) {
+                 loop_filter(h, sl, lf_x_start, sl->mb_x);
++                mibcm_dbt_rows(h, sl->mb_y + 1);
+                 sl->mb_x = lf_x_start = 0;
+                 decode_finish_row(h, sl);
+                 ++sl->mb_y;
+                 if (FIELD_OR_MBAFF_PICTURE(h)) {
+                     ++sl->mb_y;
+                     if (FRAME_MBAFF(h) && sl->mb_y < h->mb_height)
+                         predict_field_decoding_flag(h, sl);
+                 }
+             }
+ 
+             if (eos || sl->mb_y >= h->mb_height) {
+                 ff_tlog(h->avctx, "slice end %d %d\n",
+                         get_bits_count(&sl->gb), sl->gb.size_in_bits);
+                 er_add_slice(sl, sl->resync_mb_x, sl->resync_mb_y, sl->mb_x - 1,
+                              sl->mb_y, ER_MB_END);
+-                if (sl->mb_x > lf_x_start)
++                if (sl->mb_x > lf_x_start) {
+                     loop_filter(h, sl, lf_x_start, sl->mb_x);
++                    mibcm_dbt_partial(h, sl, lf_x_start, sl->mb_x);
++                }
+                 goto finish;
+             }
+         }
+     } else {
+         for (;;) {
+             int ret;
+ 
+             if (sl->mb_x + sl->mb_y * h->mb_width >= sl->next_slice_idx) {
+@@ -2736,16 +3009,17 @@
+                        "error while decoding MB %d %d\n", sl->mb_x, sl->mb_y);
+                 er_add_slice(sl, sl->resync_mb_x, sl->resync_mb_y, sl->mb_x,
+                              sl->mb_y, ER_MB_ERROR);
+                 return ret;
+             }
+ 
+             if (++sl->mb_x >= h->mb_width) {
+                 loop_filter(h, sl, lf_x_start, sl->mb_x);
++                mibcm_dbt_rows(h, sl->mb_y + 1);
+                 sl->mb_x = lf_x_start = 0;
+                 decode_finish_row(h, sl);
+                 ++sl->mb_y;
+                 if (FIELD_OR_MBAFF_PICTURE(h)) {
+                     ++sl->mb_y;
+                     if (FRAME_MBAFF(h) && sl->mb_y < h->mb_height)
+                         predict_field_decoding_flag(h, sl);
+                 }
+@@ -2770,18 +3044,20 @@
+ 
+             if (get_bits_left(&sl->gb) <= 0 && sl->mb_skip_run <= 0) {
+                 ff_tlog(h->avctx, "slice end %d %d\n",
+                         get_bits_count(&sl->gb), sl->gb.size_in_bits);
+ 
+                 if (get_bits_left(&sl->gb) == 0) {
+                     er_add_slice(sl, sl->resync_mb_x, sl->resync_mb_y,
+                                  sl->mb_x - 1, sl->mb_y, ER_MB_END);
+-                    if (sl->mb_x > lf_x_start)
++                    if (sl->mb_x > lf_x_start) {
+                         loop_filter(h, sl, lf_x_start, sl->mb_x);
++                        mibcm_dbt_partial(h, sl, lf_x_start, sl->mb_x);
++                    }
+ 
+                     goto finish;
+                 } else {
+                     er_add_slice(sl, sl->resync_mb_x, sl->resync_mb_y, sl->mb_x,
+                                  sl->mb_y, ER_MB_ERROR);
+ 
+                     return AVERROR_INVALIDDATA;
+                 }
+@@ -2789,16 +3065,27 @@
+         }
+     }
+ 
+ finish:
+     sl->deblocking_filter = orig_deblock;
+     return 0;
+ }
+ 
++/* mib-cluster-map: decode_slice_mbs(), and the deblocking thread's end of
++ * the slice (also after an error). */
++static int decode_slice(struct AVCodecContext *avctx, void *arg)
++{
++    H264SliceContext *sl = arg;
++    int ret = decode_slice_mbs(avctx, arg);
++
++    mibcm_dbt_end(sl->h264, sl);
++    return ret;
++}
++
+ /**
+  * Call decode_slice() for each context.
+  *
+  * @param h h264 master context
+  */
+ int ff_h264_execute_decode_slices(H264Context *h)
+ {
+     AVCodecContext *const avctx = h->avctx;
+diff -ru -U 8 a/libavcodec/h264dec.c b/libavcodec/h264dec.c
+--- a/libavcodec/h264dec.c
++++ b/libavcodec/h264dec.c
+@@ -344,16 +344,17 @@
+     av_frame_free(&pic->f_grain);
+ }
+ 
+ static av_cold int h264_decode_end(AVCodecContext *avctx)
+ {
+     H264Context *h = avctx->priv_data;
+     int i;
+ 
++    ff_h264_mibcm_dbt_free(h);
+     ff_h264_remove_all_refs(h);
+     ff_h264_free_tables(h);
+ 
+     for (i = 0; i < H264_MAX_PICTURE_COUNT; i++) {
+         h264_free_pic(h, &h->DPB[i]);
+     }
+     memset(h->delayed_pic, 0, sizeof(h->delayed_pic));
+ 
+diff -ru -U 8 a/libavcodec/h264dec.h b/libavcodec/h264dec.h
+--- a/libavcodec/h264dec.h
++++ b/libavcodec/h264dec.h
+@@ -362,16 +362,19 @@
+     int workaround_bugs;
+     int x264_build;
+     /* Set when slice threading is used and at least one slice uses deblocking
+      * mode 1 (i.e. across slice boundaries). Then we disable the loop filter
+      * during normal MB decoding and execute it serially at the end.
+      */
+     int postpone_filter;
+ 
++    /* mib-cluster-map: deblocking on its own thread (h264_slice.c) */
++    struct MibcmDeblockThread *mibcm_dbt;
++
+     /*
+      * Set to 1 when the current picture is IDR, 0 otherwise.
+      */
+     int picture_idr;
+ 
+     /*
+      * Set to 1 when the current picture contains only I slices, 0 otherwise.
+      */
+@@ -664,16 +667,17 @@
+ /**
+  * Submit a slice for decoding.
+  *
+  * Parse the slice header, starting a new field/frame if necessary. If any
+  * slices are queued for the previous field, they are decoded.
+  */
+ int ff_h264_queue_decode_slice(H264Context *h, const H2645NAL *nal);
+ int ff_h264_execute_decode_slices(H264Context *h);
++void ff_h264_mibcm_dbt_free(H264Context *h);
+ int ff_h264_update_thread_context(AVCodecContext *dst,
+                                   const AVCodecContext *src);
+ int ff_h264_update_thread_context_for_user(AVCodecContext *dst,
+                                            const AVCodecContext *src);
+ 
+ void ff_h264_flush_change(H264Context *h);
+ 
+ void ff_h264_free_tables(H264Context *h);

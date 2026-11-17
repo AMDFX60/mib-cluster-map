@@ -63,6 +63,9 @@ These shaped the design; changing them has broken things before.
   until the next packet arrives, while the phone waits for the
   acknowledgement before sending it: a deadlock that ends at the phone's
   ~300 ms timeout, so 3.3 fps. The player uses low-delay, slice threading.
+  What runs in parallel from 1.4.2 is within a picture: the
+  deblocking filter on a second thread, two rows of macroblocks behind the
+  decoder (`tools/ffmpeg_deblock_thread.patch`), with no picture held back.
   For the same reason the hook ends each frame with an access unit
   delimiter: FFmpeg's H.264 parser only knows a picture is complete when the
   next one starts, and the delimiter is that start.
@@ -245,8 +248,29 @@ is 0 on every edge. `tools/ffmpeg_intra_neon.patch` (1.4.2) adds the
 filters for edges next to an intra-coded block (strength 4) in NEON, which
 FFmpeg has only for aarch64: on 32-bit ARM they ran in C, about 1,400
 instructions an edge against 130 for the normal NEON filter, and Google
-Maps codes new map that comes into view as intra blocks. All three patches
-give FFmpeg's C code's pictures bit for bit.
+Maps codes new map that comes into view as intra blocks.
+`tools/ffmpeg_deblock_thread.patch` (1.4.2) moves the deblocking
+filter off the decoder thread when a picture is one slice, as the phone
+sends it: `decode_slice()` hands each finished row of macroblocks to a
+second thread, which runs FFmpeg's own `loop_filter()` on it with a copy of
+the slice context, in the same order. It stays two rows behind, because
+filtering row y changes the bottom of row y - 1 and all of row y, while
+decoding row y + 2 needs row y + 1 unfiltered for intra prediction; the
+decoder therefore runs with `deblocking_filter = 0`, as FFmpeg's own
+postponed filtering does. At the end of the slice the decoder waits for
+the row in progress (raising the thread's priority meanwhile) and filters
+what is left itself, so a thread starved of CPU costs at most a row. The
+player gives it priority 11 (`GAL_PLAYER_DEBLOCK_THREAD`,
+`GAL_PLAYER_DEBLOCK_PRIORITY`) and logs once a minute how much of the rows
+it took (`deblock:`). The decoder runs at 16, as gal spawns the player; the
+unit's interface at 13 and 14; its background programs, its own navigation
+most of all (about 0.6 of a core), at 10. At 9 (1.4.2-beta2) the thread got
+a third of a core and 58 to 69 % of the rows, the decoder 12 % less time a
+picture than 1.4.1 (car test, same data rate); at 11 it gets about half a
+core and 95 %: 18.5 % less time a picture, about 25 pictures a second and
+90 ms behind the phone, with the unit's processor fully used while the map
+moves (no audio drop-outs or timeouts in the system log; the navigation got
+less). All four patches give FFmpeg's C code's pictures bit for bit.
 
 Where the decoding work goes (`tests/neon/run.sh prof`, map-like streams,
 1.4.1-beta1): entropy decoding and macroblock set-up 21 to 31 %, motion
@@ -256,7 +280,12 @@ cent. The stream recorded on the Superb (1.4.1, first 600 pictures, 19.1
 million instructions a picture) has more intra blocks: entropy decoding
 28 %, deblocking 43 % (C set-up 22 %, NEON filters 10 %, the intra filters
 then still in C 10 %), the rest 29 %. With the intra filters in NEON
-(1.4.2) 9.1 % fewer instructions there and 7.6 % over the whole 120 s.
+(1.4.2) 9.1 % fewer instructions there and 7.6 % over the whole 120 s
+(in the car about 3 to 6 % less decoding time: the unit spends much of it
+waiting for memory). With the deblocking thread (1.4.2) the decoder
+thread executes 11.3 million instructions a picture there instead of 17.4
+(35 % fewer); the thread takes 92 % of the rows, the decoder finishes the
+rest at each picture's end.
 Allowing unaligned loads in the C code would save only 3.5 %. Switching deblocking off (`GAL_PLAYER_DEBLOCK=all`) saves 23 to 41 %,
 but the errors then build up from picture to picture until the next
 keyframe, which the phone sends about once a minute: down to 19 dB on the
@@ -268,7 +297,11 @@ accesses as the unit does, and FFmpeg as shipped, as 1.4.0 and as now. It
 decodes test streams made from the cockpit photos with each and compares
 every picture with FFmpeg's C code, and runs FFmpeg's checkasm. FFmpeg as
 shipped must stop in `ff_h264_h_loop_filter_luma_neon` at the same
-instruction as in the car, or the check itself is broken.
+instruction as in the car, or the check itself is broken. The deblocking
+thread is checked the same way, as the player runs it (two slice threads)
+and with one, in the emulator and on the PC's own cores, and under
+Valgrind's Helgrind, which reports memory the two threads touch without a
+lock in between.
 `tests/neon/run.sh prof` counts the instructions per picture (1.4.1-beta2:
 7 % fewer than 1.4.0 on the day map stream, 14 % on the night map, 21 % at a
 low data rate; 1.4.2-beta1 on the Superb's recorded stream: 17.3 million,

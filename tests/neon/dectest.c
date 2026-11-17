@@ -1,10 +1,12 @@
 /* Decodes an Annex B H.264 file the way stream-player does (parser, low
  * delay, fast, loop filter skipped on non-reference pictures) and prints an
  * MD5 of every picture's visible planes.
- *   dectest [-c] [-q] [-t threads] [-d] file
+ *   dectest [-c] [-q] [-t threads] [-d] [-T] file
  *   -c  C code only (no NEON), the reference
  *   -q  no per-picture MD5s and no MD5 work at all (for profiling)
- *   -d  loop filter on every picture (not only reference ones)          */
+ *   -d  loop filter on every picture (not only reference ones)
+ *   -T  deblocking on its own thread (tools/ffmpeg_deblock_thread.patch),
+ *       as the player does from 1.4.2-beta2; its statistics on stderr      */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +19,14 @@
 #include <signal.h>
 #include <ucontext.h>
 
+/* In FFmpeg with tools/ffmpeg_deblock_thread.patch only (weak: c6 and orig
+ * have none). */
+extern int mibcm_h264_deblock_thread __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_rows_thread __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_rows_decoder __attribute__((weak));
+extern volatile unsigned mibcm_h264_dbt_waits __attribute__((weak));
+extern volatile int mibcm_h264_dbt_state __attribute__((weak));
+
 static struct AVMD5 *g_all;
 static int g_quiet, g_frames;
 
@@ -24,8 +34,12 @@ static int g_quiet, g_frames;
 static void on_fault(int sig, siginfo_t *si, void *uc)
 {
     char msg[96];
-    int n = snprintf(msg, sizeof(msg), "FAULT sig=%d pc=%#lx addr=%p\n", sig,
-                     (unsigned long)((ucontext_t *)uc)->uc_mcontext.arm_pc, si->si_addr);
+#ifdef __arm__
+    unsigned long pc = (unsigned long)((ucontext_t *)uc)->uc_mcontext.arm_pc;
+#else
+    unsigned long pc = 0;   /* the PC build (C code, deblocking thread checks) */
+#endif
+    int n = snprintf(msg, sizeof(msg), "FAULT sig=%d pc=%#lx addr=%p\n", sig, pc, si->si_addr);
     write(2, msg, n);
     _exit(128 + sig);
 }
@@ -63,8 +77,9 @@ static void drain(AVCodecContext *c, AVFrame *f)
 
 int main(int argc, char **argv)
 {
-    int force_c = 0, threads = 1, all_deblock = 0, o;
-    while ((o = getopt(argc, argv, "cqt:d")) != -1) {
+    int force_c = 0, threads = 1, all_deblock = 0, dbt = 0, o;
+    while ((o = getopt(argc, argv, "cqt:dT")) != -1) {
+        if (o == 'T') { dbt = 1; continue; }
         if (o == 'c') force_c = 1;
         else if (o == 'q') g_quiet = 1;
         else if (o == 't') threads = atoi(optarg);
@@ -80,6 +95,13 @@ int main(int argc, char **argv)
     sigaction(SIGSEGV, &sa, NULL);
     if (force_c)
         av_force_cpu_flags(0);
+    if (dbt) {
+        if (!&mibcm_h264_deblock_thread) {
+            fprintf(stderr, "-T: this FFmpeg has no deblocking thread\n");
+            return 2;
+        }
+        mibcm_h264_deblock_thread = 1;
+    }
     FILE *in = fopen(argv[optind], "rb");
     if (!in) { perror(argv[optind]); return 1; }
     const AVCodec *codec = avcodec_find_decoder(AV_CODEC_ID_H264);
@@ -120,5 +142,11 @@ int main(int argc, char **argv)
     for (int i = 0; i < 16; i++)
         printf("%02x", d[i]);
     printf("\n");
+    avcodec_free_context(&c);
+    av_parser_close(parser);
+    if (dbt)
+        fprintf(stderr, "deblocking thread: state %d, rows %u on the thread, %u on the decoder, %u waits\n",
+                mibcm_h264_dbt_state, mibcm_h264_dbt_rows_thread, mibcm_h264_dbt_rows_decoder,
+                mibcm_h264_dbt_waits);
     return 0;
 }

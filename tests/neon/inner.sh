@@ -66,6 +66,27 @@ for var in orig c6 new; do
   arm-linux-gnueabihf-nm -S -n --defined-only /t/dectest-$var > /t/dectest-$var.syms
 done
 
+# --- The same patched FFmpeg for the PC (x86, C code only), for the
+# deblocking thread (tools/ffmpeg_deblock_thread.patch) on real cores, and
+# under Valgrind's Helgrind, which reports memory that thread and the
+# decoder both touch without a lock in between. (ThreadSanitizer would do
+# too, but gcc 12's cannot run with Docker Desktop's address randomization.)
+D=/t/ff-pc
+if [ "$(cat $D/.stamp 2>/dev/null)" != "$STAMP" ]; then
+  echo "building FFmpeg $FV (PC, C code)"
+  rm -rf $D && mkdir -p $D
+  tar xf dl/ffmpeg-$FV.tar.gz -C $D --strip-components=1
+  python3 /repo/tools/ffmpeg_patches.py $D > /dev/null
+  (cd $D && ./configure --disable-asm --extra-cflags=-g --disable-stripping --disable-doc \
+     --disable-programs --disable-avdevice --disable-swresample --disable-swscale --disable-postproc \
+     --disable-avfilter --disable-everything --enable-decoder=h264 --enable-parser=h264 \
+     > /t/ff-pc.configure.log &&
+   make -j"$N" > /t/ff-pc.make.log 2>&1)
+  echo "$STAMP" > $D/.stamp
+fi
+gcc -O1 -g -I$D /repo/tests/neon/dectest.c $D/libavcodec/libavcodec.a \
+  $D/libavutil/libavutil.a -lm -lpthread -o /t/dectest-pc
+
 # --- Test streams: 1280x720, 30 fps, no B pictures, as Android Auto sends --
 if [ ! -f /t/streams/.done ]; then
   echo "making test streams"
@@ -116,6 +137,11 @@ if [ "$MODE" = test ] || [ "$MODE" = all ]; then
   #          with two threads; FFmpeg's fast mode then skips filtering
   #          across slice edges, so it differs from one thread on t6)
   #   new2   the same, every access in FFmpeg checked (core loads too)
+  #   newD   as the player decodes from 1.4.2-beta2: two slice threads and
+  #          the deblocking thread (reference: refT2)
+  #   newD1  the deblocking thread with one slice thread (reference: ref)
+  #   pcD    as newD on the PC's cores, C code (reference: refT2, which the
+  #          PC's C code must give too)
   #   orig   FFmpeg as shipped, unchecked (as on Linux and Android)
   #   origS  FFmpeg as shipped, checked: must stop as the car did
   rm -f /t/res/*
@@ -130,6 +156,9 @@ if [ "$MODE" = test ] || [ "$MODE" = all ]; then
     }
     ( run ref new 0 -c $f; run c6 c6 1 $f; run new new 1 $f; run origS orig 1 $f ) &
     ( run refT2 new 0 -c -t 2 $f; run newT2 new 1 -t 2 $f; run new2 new 2 $f; run orig orig 0 $f ) &
+    ( run newD new 1 -T -t 2 $f; run newD1 new 1 -T $f
+      rc=0; /t/dectest-pc -T -t 2 $f > res/$s.pcD.md5 2> res/$s.pcD.err || rc=$?
+      echo $rc > res/$s.pcD.rc ) &
     while [ "$(jobs -r | wc -l)" -ge "$N" ]; do wait -n || true; done
   done
   wait
@@ -137,10 +166,12 @@ if [ "$MODE" = test ] || [ "$MODE" = all ]; then
   for f in $STREAMS; do
     s=$(basename $f .h264)
     line="$(printf '%-14s %4s pictures' $s "$(tail -1 res/$s.ref.md5 | cut -d' ' -f2)")"
-    for tag in c6 new newT2 new2 orig origS; do
-      ref=ref; [ $tag = newT2 ] && ref=refT2
+    for tag in c6 new newT2 new2 newD newD1 pcD orig origS; do
+      ref=ref; case $tag in newT2|newD|pcD) ref=refT2 ;; esac
       v=$tag; case $tag in new*) v=new ;; orig*) v=orig ;; esac
-      if [ "$(cat res/$s.$tag.rc)" != 0 ]; then
+      if [ $tag = pcD ] && [ "$(cat res/$s.$tag.rc)" != 0 ]; then
+        r="ERROR (exit $(cat res/$s.$tag.rc))"; fail=1
+      elif [ "$(cat res/$s.$tag.rc)" != 0 ]; then
         r="fault in $(where $v res/$s.$tag.err)"
         [ $tag = origS ] && [[ "$r" == *ff_h264_h_loop_filter_luma_neon* ]] || fail=1
       elif cmp -s res/$s.$ref.md5 res/$s.$tag.md5; then
@@ -152,6 +183,29 @@ if [ "$MODE" = test ] || [ "$MODE" = all ]; then
       line="$line | $tag $r"
     done
     echo "$line"
+    # The deblocking thread must have taken rows where a picture is one slice.
+    grep -h 'deblocking thread:' res/$s.newD.err | sed "s/^/                 newD /"
+  done
+  # Helgrind on the start of three streams: one slice a picture (the car's),
+  # four slices (each its own pass of the deblocking thread, slice edges
+  # inside rows), and CABAC. One slice thread, so FFmpeg's own slice threads
+  # (lock-free, which Helgrind cannot follow) stay out of it. Valgrind runs
+  # one thread at a time; --fair-sched takes turns, or the decoder would do
+  # every row itself and nothing would run in parallel. The thread must have
+  # filtered rows, or the check checked nothing.
+  echo "Helgrind (thread races between the deblocking thread and the decoder):"
+  mkdir -p /t/clips
+  for c in car600:90 t6_map_slices:60 t2_high:40; do
+    s=${c%%:*}; n=${c#*:}
+    [ -f /t/streams/$s.h264 ] || continue
+    [ -s /t/clips/$s.$n.h264 ] ||
+      ffmpeg -v error -y -i /t/streams/$s.h264 -c copy -frames:v $n -f h264 /t/clips/$s.$n.h264
+    rc=0
+    valgrind --tool=helgrind --fair-sched=yes --error-exitcode=66 /t/dectest-pc -q -T \
+      /t/clips/$s.$n.h264 > res/helgrind.$s.out 2>&1 || rc=$?
+    rows=$(sed -n 's/.*rows \([0-9]*\) on the thread.*/\1/p' res/helgrind.$s.out)
+    echo "  $s, $n pictures: $(grep -o 'ERROR SUMMARY: [0-9]* errors' res/helgrind.$s.out || echo "exit $rc"); $(grep -o 'rows [0-9]* on the thread, [0-9]* on the decoder, [0-9]* waits' res/helgrind.$s.out)"
+    [ $rc = 0 ] && [ "${rows:-0}" -gt 0 ] || fail=1
   done
   echo "checkasm (FFmpeg's own test of every DSP routine against C), 10 seeds:"
   for v in new c6 orig; do
@@ -165,7 +219,7 @@ if [ "$MODE" = test ] || [ "$MODE" = all ]; then
     case $v in orig) [ $ok = 0 ] || fail=1 ;; *) [ $ok = 10 ] || fail=1 ;; esac
   done
   if [ $fail = 0 ]; then
-    echo "PASS: new and c6 give the C code's pictures without a fault; orig stops where the car did"
+    echo "PASS: new (also with the deblocking thread, with no race Helgrind sees) and c6 give the C code's pictures without a fault; orig stops where the car did"
   else
     echo "FAIL"
     exit 1
@@ -183,6 +237,9 @@ if [ "$MODE" = prof ] || [ "$MODE" = all ]; then
         > res/$s.$v.profrun 2>&1 &
       while [ "$(jobs -r | wc -l)" -ge "$N" ]; do wait -n || true; done
     done
+    # As the player decodes from 1.4.2-beta2, for the work per thread.
+    $Q -plugin /t/libfprof.so,syms=/t/dectest-new.syms,out=res/$s.newD.prof /t/dectest-new -q -T -t 2 $f \
+      > res/$s.newD.profrun 2>&1 &
   done
   wait
   echo "instructions per picture (millions):"
@@ -193,5 +250,17 @@ if [ "$MODE" = prof ] || [ "$MODE" = all ]; then
         -v b=$(head -1 res/$s.new.prof | cut -d' ' -f2) -v c=$(head -1 res/$s.orig.prof | cut -d' ' -f2) \
         'BEGIN { printf "  %-14s 1.4.0 %6.2f   now %6.2f (%4.1f %% fewer)   FFmpeg as shipped %6.2f\n",
                  s, a/n/1e6, b/n/1e6, 100*(a-b)/a, c/n/1e6 }'
+  done
+  echo "with the deblocking thread (two slice threads as in the player), millions a picture:"
+  for f in $STREAMS; do
+    s=$(basename $f .h264)
+    n=$(grep -o 'frames [0-9]*' res/$s.newD.profrun | cut -d' ' -f2)
+    # vcpu 0 is the decoder (main) thread; the busiest other one is the
+    # deblocking thread (the slice thread only works on pictures of several
+    # slices, and then the deblocking thread does not).
+    awk -v s=$s -v n=$n -v one=$(head -1 res/$s.new.prof | cut -d' ' -f2) '
+      /^vcpu / { if ($2 == 0) dec = $3; else { rest += $3; if ($3 > top) top = $3 } }
+      END { printf "  %-14s decoder thread %6.2f (%4.1f %% fewer than one thread %6.2f), other threads %6.2f\n",
+                   s, dec/n/1e6, 100*(one-dec)/one, one/n/1e6, rest/n/1e6 }' res/$s.newD.prof
   done
 fi

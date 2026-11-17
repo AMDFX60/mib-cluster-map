@@ -27,7 +27,7 @@
 # takes about 15 minutes, later ones a few.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-IMG=mib-cluster-map-neontest:1
+IMG=mib-cluster-map-neontest:2
 HOST_ROOT=$ROOT
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*)

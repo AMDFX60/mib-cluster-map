@@ -1,4 +1,5 @@
-/* QEMU plugin: instructions executed per function (from nm -S -n output).
+/* QEMU plugin: instructions executed per function (from nm -S -n output),
+ * and per thread ("vcpu N INSNS" lines at the end; 0 is the main thread).
  *   -plugin ./libfprof.so,syms=FILE,out=FILE                              */
 #include <glib.h>
 #include <inttypes.h>
@@ -17,6 +18,7 @@ static GPtrArray *tbs;
 static GMutex lock;
 static char *outpath;
 static Sym other = { 0, 0, "(other)", 0, 0 };
+static uint64_t per_vcpu[64];
 
 static Sym *find(uint64_t pc)
 {
@@ -33,6 +35,7 @@ static void tb_exec(unsigned int vcpu, void *udata)
 {
     TB *t = udata;
     __atomic_fetch_add(&t->count, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&per_vcpu[vcpu & 63], t->n, __ATOMIC_RELAXED);
 }
 
 static void tb_trans(qemu_plugin_id_t id, struct qemu_plugin_tb *tb)
@@ -70,6 +73,9 @@ static void at_exit(qemu_plugin_id_t id, void *p)
     fprintf(f, "total %" PRIu64 "\n", total);
     for (size_t i = 0; i <= nsyms && v[i]->insns; i++)
         fprintf(f, "%" PRIu64 " %" PRIu64 " %s\n", v[i]->insns, v[i]->calls, v[i]->name);
+    for (int i = 0; i < 64; i++)
+        if (per_vcpu[i])
+            fprintf(f, "vcpu %d %" PRIu64 "\n", i, per_vcpu[i]);
     fclose(f);
 }
 

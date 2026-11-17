@@ -42,9 +42,10 @@ for the Skoda cockpit.
   view like its own navigation.
 - **Sharp 720p picture, 1:1.** The phone draws exactly the cockpit window's
   1010×376 pixels, and they are shown without any stretching or scaling.
-- **Smooth.** Decoded with the Tegra 3's NEON unit: 17 to 30 pictures a
-  second in the car (the phone sends at most 30).
-- **In step with the centre screen.** The cockpit map runs 0.03 to 0.2
+- **Smooth.** Decoded with the Tegra 3's NEON unit, the deblocking filter on
+  a second core: about 25 pictures a second in the car while the map moves
+  (the phone sends at most 30).
+- **In step with the centre screen.** The cockpit map runs about 0.1
   seconds behind the phone (measured in the car), not about 2 seconds as
   up to 1.3.
 - **True colours.** The picture is converted the way the phone sends it, with
@@ -63,14 +64,26 @@ for the Skoda cockpit.
 
 ## Changelog
 
-### 1.4.2 (in test, compared with 1.4.1)
+### 1.4.2 (compared with 1.4.1)
 
-- **Faster decoder:** the deblocking filters for edges next to an
-  intra-coded block, which ran in C on the head unit's 32-bit ARM (FFmpeg
-  has them in NEON only for 64-bit), now run in NEON. On a PC, with a
-  cockpit stream recorded on the Superb, 7.6 % less work a picture over
-  120 s and 9.1 % in a busy stretch, with bit-for-bit the same pictures;
-  roughly one more picture a second where the decoder is the limit.
+- **Smoother cockpit map:** each picture is decoded about 18 % faster than
+  with 1.4.1 (measured in the car at the same data rate), so the cockpit
+  shows about **25 pictures a second** while the map moves, where 1.4.1
+  managed about 20.
+- **Closer to the centre screen:** about 90 ms behind the phone on average
+  instead of 110 ms.
+- **Deblocking on a second core:** the filter that smooths the block edges,
+  about 40 % of the decoding work, runs on its own thread two rows behind the
+  decoder, with bit-for-bit the same picture. Its priority sits above the
+  unit's background programs (its own navigation among them) and below the
+  interface, so menus stay as quick; while the map moves the unit's
+  processor is now fully used (`GAL_PLAYER_DEBLOCK_THREAD`,
+  `GAL_PLAYER_DEBLOCK_PRIORITY`; the player log's `deblock:` line shows
+  how much the thread takes).
+- **Intra deblocking filters in NEON:** the filters for edges next to an
+  intra-coded block ran in C on the head unit's 32-bit ARM (FFmpeg has them
+  in NEON only for 64-bit). A few percent, most where new map comes into
+  view.
 
 ### 1.4.1 (compared with 1.4.0)
 
@@ -223,7 +236,7 @@ the SD card, so leave the card in slot 1.
 | 720p picture 1:1, colours | Car-tested: sharper |
 | NEON decoder (smoothness) | Car-tested: 17 to 30 pictures a second instead of 9 to 10 |
 | The six NEON routines rewritten, deblocking set-up skipped where nothing is filtered (1.4.1) | Car-tested: no fault in about 30 minutes; the gain is within the drive's spread |
-| Intra deblocking filters in NEON (1.4.2) | Not yet car-tested; PC: 7.6 % less work a picture on the Superb's recorded stream |
+| Deblocking on a second core, intra deblocking filters in NEON (1.4.2) | Car-tested: no fault; each picture decoded about 18 % faster than with 1.4.1, about 25 pictures a second, about 90 ms behind the phone |
 | Cockpit delay behind the phone (1.4.0) | Car-tested: 0.03 to 0.2 s on average instead of about 2 s |
 | 3 pictures in flight instead of 4 (1.4.1) | Car-tested: 110 ms on average instead of 166 ms, same pictures a second |
 | Picture handover without a copy in the decoder (1.3.0) | Car-tested: runs fine; its own gain not measured separately |
@@ -260,6 +273,8 @@ needs editing. The ones this fork adds:
 | `GAL_SECONDARY_DPI` | 110 | lower draws the map, its text and the card smaller |
 | `GAL_PLAYER_COLOR` | auto | `old` for the colours before 1.3 |
 | `GAL_PLAYER_NEON` | 1 | 0 decodes without NEON (slower) |
+| `GAL_PLAYER_DEBLOCK_THREAD` | 1 | 0 deblocks in the decoder thread, as up to 1.4.1 |
+| `GAL_PLAYER_DEBLOCK_PRIORITY` | 11 | 9 leaves the deblocking thread only what the unit's own programs do not use (fewer pictures a second); 0 runs it at the decoder's priority |
 | `GAL_SECONDARY_MAX_UNACKED` | 3 | 4 as in 1.4.0 if the map gets jerkier; 8 as up to 1.3 |
 
 All settings are in the [Install guide](docs/Install.md#settings).
@@ -269,7 +284,7 @@ All settings are in the [Install guide](docs/Install.md#settings).
 From Git Bash on Windows with Docker Desktop, or on Linux and macOS:
 
 ```bash
-RELEASE_VERSION=v1.4.0-skoda ./build_local.sh
+RELEASE_VERSION=v1.4.2-skoda ./build_local.sh
 ```
 
 The package lands in `dist/` and its contents in `dist/sdcard/`. The head unit
@@ -280,8 +295,8 @@ whatever follows (`-skoda`). The first run builds FFmpeg with NEON once.
 Details are in [Development](docs/Development.md) and at the top of
 `build_local.sh`.
 
-Releases are named `mib-cluster-map_v1.4.0-skoda.zip`, test versions
-`mib-cluster-map_v1.4.0-betaN-skoda.zip`.
+Releases are named `mib-cluster-map_v1.4.2-skoda.zip`, test versions
+`mib-cluster-map_v1.4.2-betaN-skoda.zip`.
 
 ## Reporting a problem
 

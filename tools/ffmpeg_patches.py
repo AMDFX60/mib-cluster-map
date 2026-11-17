@@ -3,7 +3,15 @@
 
     tools/ffmpeg_patches.py <ffmpeg source dir>
 
-Three patches, all giving bit for bit the pictures of FFmpeg's C code:
+Four patches, all giving bit for bit the pictures of FFmpeg's C code:
+
+tools/ffmpeg_deblock_thread.patch (1.4.2-beta2): when a picture is one
+slice, a second thread runs the deblocking filter (43 % of the decoding
+work on the Superb's stream) two rows of macroblocks behind the decoder,
+in the same order and with the same data, so the decoder's own thread has
+that much less to do. The player switches it on and sets its priority
+(mibcm_h264_deblock_thread, mibcm_h264_deblock_priority); see the comment
+above mibcm_dbt_begin() in h264_slice.c.
 
 tools/ffmpeg_intra_neon.patch (1.4.2-beta1): the bS = 4 loop filters (an
 edge next to an intra-coded block) in NEON. FFmpeg has them in NEON only
@@ -57,6 +65,7 @@ PATCHES = [  # (patch, a file it changes, a text that is there once applied)
     ("ffmpeg_qnx_aligned.patch", "libavcodec/arm/h264dsp_neon.S", "QNX (mib-cluster-map)"),
     ("ffmpeg_intra_neon.patch", "libavcodec/arm/h264dsp_init_arm.c", "ff_h264_h_loop_filter_luma_intra_neon;"),
     ("ffmpeg_deblock_skip.patch", "libavcodec/h264_slice.c", "no_deblock_edges(h, sl, mb_x"),
+    ("ffmpeg_deblock_thread.patch", "libavcodec/h264_slice.c", "mibcm_dbt_begin(h, sl)"),
 ]
 SCANNED = ["h264dsp_neon.S", "h264cmc_neon.S", "h264pred_neon.S",
            "h264qpel_neon.S", "h264idct_neon.S"]
