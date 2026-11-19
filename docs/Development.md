@@ -327,6 +327,15 @@ on a Windows folder), keeps FFmpeg in the docker volume
 zip is missing. Build the toolchain with `./build_local.sh toolchain`, not from
 a Windows clone: Git there turns the repository's symlinks into text files.
 
+Before it packs a card, the build refuses scripts the unit cannot run as
+written: `tools/check_scripts.py` (commands and syntax units lack),
+`tools/unit_shell_lint.py` with its own test `tests/unit_shell_lint_test.sh`
+(from upstream: shapes the unit's shell, PD KSH 5.2.14, treats differently
+from dash and ksh93, above all a block that ends in a failed `&&` list, which
+stops a `set -e` script there; write `if A; then B; fi` or `A && B || :`), and
+`tests/regression_guards.sh` (faults that once reached a car: the master
+switch, `set -eu` in the installer, every green-menu script packed).
+
 ## Testing on a car
 
 Change one thing per run, and record the firmware, the package build

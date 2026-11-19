@@ -80,7 +80,10 @@ train_supported()
     fi
     g=`wc -c < /mnt/app/eso/bin/apps/gal 2>/dev/null | sed 's/ //g'`
     RECEIVER_FOUND=`receiver_path`
-    r=`wc -c < "$RECEIVER_FOUND" 2>/dev/null | sed 's/ //g'`
+    # Not "wc < $RECEIVER_FOUND" with nothing found: the shell reports the
+    # empty file name itself, past the 2>/dev/null (upstream be87e17).
+    r=
+    if [ -n "$RECEIVER_FOUND" ]; then r=`wc -c < "$RECEIVER_FOUND" 2>/dev/null | sed 's/ //g'`; fi
     # A trial profile for this train in the settings file (as find_profile.py
     # prints it): installed for testing. The hook checks the real addresses
     # when it loads and does nothing if they differ.

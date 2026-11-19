@@ -49,6 +49,8 @@ app_mount_finish()
 navignore30_restore()
 {
     N30_JAR=/mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar
+    # -r first: "wc -c <" on a missing file prints "cannot open" past 2>/dev/null.
+    [ -r "$N30_JAR" ] || return 0
     [ "`wc -c < "$N30_JAR" 2>/dev/null | sed 's/ //g'`" = 27340 ] || return 0
     [ -r "$1" ] || return 0
     if mount -uw /mnt/app 2>/dev/null && cp "$1" "$N30_JAR.new" 2>/dev/null &&
@@ -74,6 +76,6 @@ carplay_pf_close()
         [ -f "$PF" ] && grep -q "$CARPLAY_PF_MARK" "$PF" || continue
         cp -p "$PF" "$PF.clustermap-new" &&
             grep -v "$CARPLAY_PF_MARK" "$PF" > "$PF.clustermap-new" &&
-            mv "$PF.clustermap-new" "$PF" && echo "Firewall: CarPlay map port closed in $PF"
+            mv "$PF.clustermap-new" "$PF" && echo "Firewall: CarPlay map port closed in $PF" || :
     done
 }

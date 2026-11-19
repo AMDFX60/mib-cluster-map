@@ -221,10 +221,11 @@ unit's own copy of the settings and takes effect after a reboot.
 | Turn card top right | The card in the top right corner with the arrival time under it; the car lower down |
 | Turn card top left | The same space moved right, so the card has room on the left (Maps decides the side) |
 | Test: map smaller / larger, Map size as installed | DPI -10 / +10, or back |
+| Cockpit map OFF / ON | Switches the cockpit map off without uninstalling: Android Auto runs as stock (e.g. for a wireless adapter that has trouble with it), and on again |
 | Save logs to SD | Logs for a bug report |
 
-The turn card setting is kept by the next install; the other entries go back
-to the card's settings when you install again. The menu runs its scripts from
+The turn card setting and Cockpit map OFF/ON are kept by the next install;
+the other entries go back to the card's settings when you install again. The menu runs its scripts from
 the SD card, so leave the card in slot 1.
 
 ## Status on the Superb (`P4526`)

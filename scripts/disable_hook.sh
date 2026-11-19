@@ -202,10 +202,10 @@ if [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
         echo "Kept NavActiveIgnore: the CarPlay map needs it too."
     elif [ -f /mnt/app/eso/hmi/lsd/.aacluster_navignore_added ]; then
         if sh "$CARD_ROOT/lsd_jar.sh" remove NavActiveIgnore.jar; then
-            mount -uw /mnt/app 2>/dev/null && {
+            if mount -uw /mnt/app 2>/dev/null; then
                 rm -f /mnt/app/eso/hmi/lsd/.aacluster_navignore_added /mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar
                 mount -ur /mnt/app 2>/dev/null || true
-            }
+            fi
             echo "Removed the NavActiveIgnore patch the installer had added."
         else
             echo "WARNING: could not remove the NavActiveIgnore line; lsd.sh is unchanged." >&2
@@ -221,20 +221,22 @@ if [ -r "$CARD_ROOT/lsd_jar.sh" ]; then
             continue
         fi
         if sh "$CARD_ROOT/lsd_jar.sh" remove $EXTRA_JAR; then
-            mount -uw /mnt/app 2>/dev/null && {
+            if mount -uw /mnt/app 2>/dev/null; then
                 rm -f "$EXTRA_MARKER"
                 mount -ur /mnt/app 2>/dev/null || true
-            }
+            fi
             echo "Removed $EXTRA_JAR, which the installer had added."
         else
             echo "WARNING: could not remove $EXTRA_JAR; lsd.sh is unchanged." >&2
         fi
     done
     if [ -f /mnt/app/root/vcaa_turn_text ]; then
-        mount -uw /mnt/app 2>/dev/null && {
+        # An if, not "mount && { ... }": a block ending in a failed && list
+        # stops a set -e script in the unit's shell (tools/unit_shell_lint.py).
+        if mount -uw /mnt/app 2>/dev/null; then
             rm -f /mnt/app/root/vcaa_turn_text
             mount -ur /mnt/app 2>/dev/null || true
-        }
+        fi
     fi
 fi
 echo "Reboot the unit to run GAL without the hook."

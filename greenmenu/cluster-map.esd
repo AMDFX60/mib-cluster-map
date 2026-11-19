@@ -58,6 +58,14 @@ script
     label   "Map size as installed, then reboot"
 
 script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/map_off.sh"
+    label   "Cockpit map OFF (Android Auto as stock), then reboot"
+
+script
+    value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/map_on.sh"
+    label   "Cockpit map ON, then reboot"
+
+script
     value   sys 1 0x0100 "/fs/sda0/ClusterMap/GEM/switch_to_turn_by_turn.sh"
     label   "Switch to turn-by-turn arrows instead (no map)"
 

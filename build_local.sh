@@ -182,7 +182,7 @@ package() {
   cp "$ROOT/scripts/lib_app_mount.sh" "$ROOT/scripts/hook_status.sh" "$ROOT/scripts/lib_resolve_hook_log.sh" \
      "$ROOT/scripts/lib_unit.sh" "$ROOT/scripts/window_fix.sh" \
      "$ROOT/scripts/lib_cluster_frame.sh" "$ROOT/scripts/card_layout.sh" \
-     "$ROOT/scripts/map_size.sh" \
+     "$ROOT/scripts/map_size.sh" "$ROOT/scripts/menu_switch.sh" \
      "$ROOT/scripts/lib_keep_settings.sh" "$D/scripts/"
   cp "$ROOT"/greenmenu/GEM/*.sh "$D/GEM/"
   cp "$ROOT/greenmenu/cluster-map.esd" "$S/Custom/GreenMenu/"
@@ -213,6 +213,12 @@ package() {
   cp "$ROOT/LICENSE" "$D/LICENSE"
   # The unit's shell needs LF line endings and plain ASCII in everything it runs.
   python3 "$ROOT/tools/check_scripts.py" "$D" || { echo "REJECTED: scripts use something units lack"; exit 1; }
+  # Shapes the unit's shell (PD KSH 5.2.14) runs differently from dash/ksh93,
+  # e.g. a block ending in a failed && list stops a set -e script there.
+  # From upstream (MacsInSpace, v1.2.7); its own test first.
+  sh "$ROOT/tests/unit_shell_lint_test.sh" >/dev/null || { echo "REJECTED: tests/unit_shell_lint_test.sh failed"; exit 1; }
+  python3 "$ROOT/tools/unit_shell_lint.py" "$D" || { echo "REJECTED: a script has a shape the unit's shell treats differently"; exit 1; }
+  sh "$ROOT/tests/regression_guards.sh" || { echo "REJECTED: a regression guard failed"; exit 1; }
   bad=$(perl -ne 'if (/\r|[^\x00-\x7F]/) { print "$ARGV\n"; close ARGV }' "$D"/*.sh "$D"/scripts/*.sh "$D"/GEM/*.sh "$D"/final/*.sh "$S"/Custom/GreenMenu/*.esd "$D"/gal_dualscreen.conf | sort -u)
   [ -z "$bad" ] || { echo "REJECTED: CR or non-ASCII in: $bad"; exit 1; }
   (cd "$D" && shasum -a 256 libgal_hook.so stream-player profile_check profiles.conf lib/libdmdt_flush.so > SHA256SUMS.txt)

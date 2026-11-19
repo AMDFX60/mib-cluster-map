@@ -38,11 +38,26 @@ if [ -r "$UNIT_CONF" ]; then
     else
         echo "  map size: DPI ${d:-unknown}"
     fi
+    # The last line counts: the hook lets each GAL_DUALSCREEN_ENABLE line of
+    # the file overwrite gal's start-up value (scripts/menu_switch.sh).
+    e=`sed -n 's/^[ 	]*GAL_DUALSCREEN_ENABLE[ 	]*=[ 	]*\([01]\)[ 	]*$/\1/p' "$UNIT_CONF" | tail -1`
+    if [ "$e" = 0 ]; then
+        echo "  cockpit map: switched OFF (GAL_DUALSCREEN_ENABLE=0); \"Cockpit map ON\", then reboot"
+    fi
 fi
+# The hook and the player read a gal_dualscreen.conf in a card's root before
+# the installed one (upstream #24: wrong map size only with that card in).
+for f in /fs/sda0/gal_dualscreen.conf /fs/sdb0/gal_dualscreen.conf; do
+    if [ -f "$f" ]; then echo "WARNING: $f overrides the installed settings while that card is in."; fi
+done
 if grep -q 'libcarplay_cluster.so' "$CONFIG" 2>/dev/null; then
     echo "CarPlay map: left by an older package. Install again to remove it."
 fi
-if sh "$PKG/lsd_jar.sh" loaded NavActiveIgnore.jar; then echo "NavActiveIgnore: loaded (required)"
+if sh "$PKG/lsd_jar.sh" loaded NavActiveIgnore.jar && [ ! -s /mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar ]; then
+    # Java skips a missing jar without a word (upstream #24).
+    echo "NavActiveIgnore: its start-up line is there, but the jar file is MISSING."
+    echo "  The cockpit drops the map at a route start. Install puts the file back."
+elif sh "$PKG/lsd_jar.sh" loaded NavActiveIgnore.jar; then echo "NavActiveIgnore: loaded (required)"
 elif sh "$PKG/lsd_jar.sh" loaded CarPlayNavigationPatch.jar; then echo "NavActiveIgnore: loaded as CarPlay's CarPlayNavigationPatch.jar (same patch)"
 else echo "NavActiveIgnore: not loaded (Install adds it on tested firmware)"; fi
 j=/mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar

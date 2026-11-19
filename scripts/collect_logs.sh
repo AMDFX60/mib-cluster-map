@@ -30,8 +30,10 @@ grep -n 'Xbootclasspath' /mnt/app/eso/hmi/lsd/lsd.sh > $OUT/java_patches.txt 2>&
 { echo "--- lsd/jars"; ls -l /mnt/app/eso/hmi/lsd/jars /mnt/app/eso/hmi/lsd/jars_off; } >> $OUT/java_patches.txt 2>&1
 # dmdt buffers its output when it is not a terminal; the flush shim makes it
 # write before it exits (as in GEM/collect_for_porting.sh).
-# gd lists every window with its size; 33 is the stock cluster map.
-for c in gs gd; do
+# gd lists every window with its size; 33 is the stock cluster map. gc lists
+# the contexts and what each shows (upstream ac01db5): which window the
+# cockpit's map context holds, e.g. when the map pops up in another view.
+for c in gs gd gc; do
     ( cd /eso && LD_PRELOAD="$HERE/lib/libdmdt_flush.so" LD_LIBRARY_PATH=/eso/lib:/lib:/usr/lib \
       IPL_CONFIG_DIR=/etc/eso/production ./bin/apps/dmdt $c ) > $OUT/dmdt_$c.txt 2>&1
 done
@@ -53,6 +55,26 @@ else
     echo "NOTE: no cockpit display (context $CTX) at this moment. That is normal" >> $OUT/dmdt_gs.txt
     echo "unless the cockpit was in map view when these logs were saved." >> $OUT/dmdt_gs.txt
 fi
+# Crash archives the unit's dumper keeps (pidin: dumper -d /mnt/ota/system/core).
+# List them all, and copy the newest one of gal (Android Auto) when it is
+# small: upstream #127, #24 and #4 logged the same crash in gal (signal 11,
+# ip 0x10224e4) as the phone disconnected; the core shows where (upstream
+# 153dc72, 31a05ed).
+CORE_DIR=${CLUSTERMAP_CORE_DIR:-/mnt/ota/system/core}
+ls -l $CORE_DIR > $OUT/core_listing.txt 2>&1
+CORE=`ls -t $CORE_DIR/*gal.core* 2>/dev/null | sed -n 1p`
+if [ -n "$CORE" ] && [ -f "$CORE" ]; then
+    CORE_SIZE=`wc -c < "$CORE" | sed 's/ //g'`
+    if [ "${CORE_SIZE:-0}" -gt 0 ] && [ "$CORE_SIZE" -le 8388608 ]; then
+        if cp "$CORE" $OUT/ 2>/dev/null; then echo "copied: $CORE ($CORE_SIZE bytes)" >> $OUT/core_listing.txt; fi
+    else
+        echo "not copied (over 8 MB): $CORE ($CORE_SIZE bytes)" >> $OUT/core_listing.txt
+    fi
+fi
+# The kernel's crash lines ("run fault pid N tid N signal 11 ... ip ..."): a
+# crash in gal or the player shows here even when no core was kept. One
+# plain pattern: the unit's grep takes "a\|b" as literal text.
+grep "fault pid" $OUT/sloginfo.txt > $OUT/faults.txt 2>&1
 sync 2>/dev/null
 ls -l $OUT
 echo "Done: ClusterMap/run_logs/$N. Wait a few seconds, then take the SD card to the laptop."

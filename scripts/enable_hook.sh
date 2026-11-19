@@ -86,6 +86,16 @@ finish()
 
 trap finish 0 1 2 15
 
+# Size of a file in bytes, or nothing when it is not there. "wc -c < file
+# 2>/dev/null" still lets the shell print "cannot open" for a missing file
+# (upstream #100, #115 read it as a failed install), and under set -e a
+# failing command in an assignment ends the script, so this always returns 0.
+file_size()
+{
+    if [ -r "$1" ]; then wc -c < "$1" | sed 's/ //g'; fi
+    return 0
+}
+
 usage()
 {
     echo "Usage: $0 [--dpi NUMBER] [--debug|--no-debug]   (debug logging is off unless --debug)"
@@ -429,10 +439,12 @@ if [ -r "$CARD_ROOT/gal_dualscreen.conf" ]; then
        [ -r "$OWNER_SAVED" ]; then
         . "$CARD_ROOT/scripts/lib_keep_settings.sh"
         if [ -n "$PKG_NOW" ] && [ "$PKG_NOW" = "$PKG_LAST" ] && [ -r "$CARD_LAST" ]; then
+            # "|| :": a block that ends in a failed && list stops this set -e
+            # script in the unit's shell (tools/unit_shell_lint.py).
             keep_unedited "$OWNER_SAVED" "$CONF_COPY.card" "$CARD_LAST" > /tmp/clustermap_owner_prev.conf 2>/dev/null &&
-                KEEP_FROM=saved
+                KEEP_FROM=saved || :
         else
-            cp "$OWNER_SAVED" /tmp/clustermap_owner_prev.conf 2>/dev/null && KEEP_FROM=saved
+            cp "$OWNER_SAVED" /tmp/clustermap_owner_prev.conf 2>/dev/null && KEEP_FROM=saved || :
         fi
     elif [ "$KEEP_SETTINGS" != 0 ] && [ ! -r "$OWNER_SAVED" ] && [ -r "$CONF_COPY" ]; then
         # Installed by a release that saved no owner lines (v1.1.1, beta18 or
@@ -667,6 +679,16 @@ case "$CONF_DPI" in
 esac
 [ "$DPI" -ne 140 ] && EFFECTIVE_DPI=$DPI
 
+# A gal_dualscreen.conf in the root of a card is read by the hook and the
+# player before the installed one (for quick tests), so an old copy left
+# there overrides this install whenever that card is in (upstream #24: wrong
+# map size only with the card in). Only the ClusterMap folder's copy is ours.
+for ROOT_CONF in /fs/sda0/gal_dualscreen.conf /fs/sdb0/gal_dualscreen.conf; do
+    if [ -f "$ROOT_CONF" ]; then
+        echo "WARNING: $ROOT_CONF is read instead of the installed settings while that card is in. Delete it unless you put it there on purpose." >&2
+    fi
+done
+
 # Install stream-player to /mnt/app/navigation
 # Through a new file and a rename: copying over the old player fails while it
 # runs, and would leave the old one in place.
@@ -685,7 +707,7 @@ fi
 # What the CarPlay map of an older package left on the unit.
 for f in $CARPLAY_LEFTOVERS; do
     if [ -f "$PRELOAD_WRITE_DIR/$f" ]; then
-        rm -f "$PRELOAD_WRITE_DIR/$f" && echo "Removed the old CarPlay map's $f"
+        if rm -f "$PRELOAD_WRITE_DIR/$f"; then echo "Removed the old CarPlay map's $f"; fi
     fi
 done
 rm -f "$APP_MOUNT/root/mibr-carplay111-safearea.conf" "$APP_MOUNT/root/mibr-carplay111-nav-query.enabled" \
@@ -798,7 +820,18 @@ DPI_ENV=
 # whether the tooling finds it. Emitted only when --log asked for a path.
 LOG_ENV=
 [ -n "$LOG_PATH_REQUESTED" ] && LOG_ENV="\"GAL_HOOK_LOG=$HOOK_LOG_PATH\", "
-INJECTION="\"LD_PRELOAD=$PRELOAD_SO_ALIAS\", \"GAL_DUALSCREEN_ENABLE=1\", \"GAL_DUALSCREEN_DEBUG=$DEBUG\", $OPT_ENV$LOG_ENV$DPI_ENV"
+# The master switch from the settings. The hook lets the settings file's
+# GAL_DUALSCREEN_ENABLE line win over this start-up value (so the green
+# menu's "Cockpit map OFF/ON" counts after a reboot); every other key in the
+# file only counts when the start-up has none. A fixed 1 here made
+# GAL_DUALSCREEN_ENABLE=0 do nothing (upstream #101).
+HOOK_ENABLE=1
+if [ "`sed -n 's/^GAL_DUALSCREEN_ENABLE=\([01]\)[ 	]*$/\1/p' "$PRELOAD_WRITE_DIR/gal_dualscreen.conf" 2>/dev/null | tail -1`" = 0 ]; then
+    HOOK_ENABLE=0
+    echo "GAL_DUALSCREEN_ENABLE=0: the hook is installed but switched off. Android Auto"
+    echo "  runs as stock, with no map on the cockpit, until it is 1 again."
+fi
+INJECTION="\"LD_PRELOAD=$PRELOAD_SO_ALIAS\", \"GAL_DUALSCREEN_ENABLE=$HOOK_ENABLE\", \"GAL_DUALSCREEN_DEBUG=$DEBUG\", $OPT_ENV$LOG_ENV$DPI_ENV"
 
 # Refuse to write an array that smartphone_integrator would silently
 # truncate. At 11 entries the ENTIRE injection was dropped once -- GAL ran
@@ -1012,8 +1045,26 @@ echo
 if [ ! -r "$LSD_SH" ] || [ ! -r "$CARD_ROOT/lsd_jar.sh" ]; then
     echo "WARNING: cannot check the Java interface ($LSD_SH or lsd_jar.sh missing)." >&2
 else
-    NAV_HAVE=`wc -c < /mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar 2>/dev/null | sed 's/ //g'`
-    NAV_WANT=`wc -c < "$NAVIGNORE_SRC" 2>/dev/null | sed 's/ //g'`
+    NAV_HAVE=`file_size /mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar`
+    NAV_WANT=`file_size "$NAVIGNORE_SRC"`
+    # The start-up line without the jar file behind it: Java skips a missing
+    # jar without a word, so "loaded" was reported while the cockpit still
+    # dropped the map at the first route (upstream #24, a P4512_2 whose
+    # lsd/jars held only the two stock jars; upstream 2448520). Put the file
+    # back before the checks below.
+    if [ -z "$NAV_HAVE" ] || [ "$NAV_HAVE" = 0 ]; then
+        if sh "$CARD_ROOT/lsd_jar.sh" loaded NavActiveIgnore.jar && [ "$NAVIGNORE_NEVER" -eq 0 ] &&
+           [ "$KEEP_NAVIGNORE" -eq 0 ]; then
+            echo "Java check: NavActiveIgnore has its start-up line, but the jar file is missing."
+            if [ -r "$NAVIGNORE_SRC" ] && sh "$CARD_ROOT/lsd_jar.sh" add NavActiveIgnore.jar "$NAVIGNORE_SRC"; then
+                NAV_HAVE=`file_size /mnt/app/eso/hmi/lsd/jars/NavActiveIgnore.jar`
+            else
+                echo "WARNING: could not copy NavActiveIgnore.jar; the cockpit will drop the map" >&2
+                echo "         when the phone starts a route. Apply it from the toolbox:" >&2
+                echo "         Customization > Navigation." >&2
+            fi
+        fi
+    fi
     if sh "$CARD_ROOT/lsd_jar.sh" loaded NavActiveIgnore.jar && [ "$NAVIGNORE_NEVER" -eq 1 ] &&
        [ "$NAVIGNORE_BUILD" = Audi ] && [ -n "$NAV_WANT" ] && [ "$NAV_HAVE" = "$NAV_WANT" ]; then
         # An Audi owner's own M.I.B. install of the Audi build (a Q5 FY on
@@ -1057,7 +1108,7 @@ else
             if [ ! -r "$NAVIGNORE_SRC" ]; then
                 echo "WARNING: the $NAVIGNORE_BUILD NavActiveIgnore build is not in this package; not added." >&2
             elif sh "$CARD_ROOT/lsd_jar.sh" add NavActiveIgnore.jar "$NAVIGNORE_SRC"; then
-                mount -uw /mnt/app 2>/dev/null && { : > "$NAVIGNORE_MARKER"; mount -ur /mnt/app 2>/dev/null || true; }
+                if mount -uw /mnt/app 2>/dev/null; then : > "$NAVIGNORE_MARKER"; mount -ur /mnt/app 2>/dev/null || true; fi
             else
                 echo "WARNING: could not add NavActiveIgnore; lsd.sh is unchanged." >&2
                 echo "         Apply it from the toolbox: Customization > Navigation." >&2
@@ -1082,7 +1133,7 @@ else
         if [ "$TBT_OK" -eq 1 ]; then
             echo "Java check: adding VCAndroidAuto.jar beside the map (CLUSTERMAP_KEEP_ARROWS=1)."
             if sh "$CARD_ROOT/lsd_jar.sh" add VCAndroidAuto.jar "$CARD_ROOT/thirdparty/VCAndroidAuto.jar"; then
-                mount -uw /mnt/app 2>/dev/null && { : > /mnt/app/eso/hmi/lsd/.aacluster_tbt_added; mount -ur /mnt/app 2>/dev/null || true; }
+                if mount -uw /mnt/app 2>/dev/null; then : > /mnt/app/eso/hmi/lsd/.aacluster_tbt_added; mount -ur /mnt/app 2>/dev/null || true; fi
             else
                 echo "WARNING: could not add VCAndroidAuto.jar; lsd.sh is unchanged." >&2
             fi
@@ -1152,7 +1203,7 @@ else
         if [ -f "$EXTRA_MARKER" ]; then
             echo "Java check: removing $EXTRA_JAR (not asked for in gal_dualscreen.conf)."
             if sh "$CARD_ROOT/lsd_jar.sh" remove $EXTRA_JAR; then
-                mount -uw /mnt/app 2>/dev/null && { rm -f "$EXTRA_MARKER"; mount -ur /mnt/app 2>/dev/null || true; }
+                if mount -uw /mnt/app 2>/dev/null; then rm -f "$EXTRA_MARKER"; mount -ur /mnt/app 2>/dev/null || true; fi
             else
                 echo "WARNING: could not remove $EXTRA_JAR; lsd.sh is unchanged." >&2
             fi
@@ -1178,7 +1229,7 @@ else
         else
             echo "Java check: adding $WANT_JAR ($WANT_KEY=1: $WANT_WHAT)."
             if sh "$CARD_ROOT/lsd_jar.sh" add $WANT_JAR "$CARD_ROOT/thirdparty/$WANT_JAR"; then
-                mount -uw /mnt/app 2>/dev/null && { : > "$WANT_MARKER"; mount -ur /mnt/app 2>/dev/null || true; }
+                if mount -uw /mnt/app 2>/dev/null; then : > "$WANT_MARKER"; mount -ur /mnt/app 2>/dev/null || true; fi
             else
                 echo "WARNING: could not add $WANT_JAR; lsd.sh is unchanged." >&2
             fi
@@ -1203,7 +1254,7 @@ else
         fi
         echo "Turn info: road name on the cockpit: $TURN_TEXT"
     elif [ -f "$TURN_TEXT_FILE" ]; then
-        mount -uw /mnt/app 2>/dev/null && { rm -f "$TURN_TEXT_FILE"; mount -ur /mnt/app 2>/dev/null || true; }
+        if mount -uw /mnt/app 2>/dev/null; then rm -f "$TURN_TEXT_FILE"; mount -ur /mnt/app 2>/dev/null || true; fi
     fi
 fi
 

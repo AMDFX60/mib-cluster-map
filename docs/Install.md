@@ -102,6 +102,8 @@ Open it with MENU (hold) > `Testmode` > `Green Developer Menu` >
 | Turn card top left, then reboot | As top right but the space moved right (`100,138,480,160`), so the free room is on the left. Maps decides which side its card goes; if it stays right, the car is just further right. Not yet car-tested |
 | Test: map smaller / larger (DPI -10 / +10), then reboot | Changes `GAL_SECONDARY_DPI` in the unit's copy in steps of 10, between 80 and 170: smaller draws the map, its text and the turn card smaller. The turn card positions above are measured at DPI 110. The status check shows the value |
 | Map size as installed, then reboot | Back to the DPI the install wrote. An install from the card also does that |
+| Cockpit map OFF (Android Auto as stock), then reboot | `GAL_DUALSCREEN_ENABLE=0` in the unit's copy: everything stays installed, the hook does nothing and the cockpit keeps the car's own map. For a wireless adapter that stops working with the map, or to compare. The next install keeps it; the status check says so |
+| Cockpit map ON, then reboot | `GAL_DUALSCREEN_ENABLE=1` again |
 | Switch to turn-by-turn arrows instead (no map) | Removes the map, installs the arrows. Install switches back |
 | Save logs to SD | For a problem report. Before rebooting: logs are in RAM |
 | Collect files for porting (quick) | About 2.5 MB, read only |
